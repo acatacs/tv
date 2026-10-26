@@ -27,7 +27,7 @@
   var cache = null;       // [{el, card}] in document order
   var dirty = true;
   var built = 0;
-  var REBUILD_MS = 400;  // busy pages mutate every frame; rebuild at most this often
+  var REBUILD_MS = 2500; // busy pages mutate constantly; rebuild the candidate list at most this often
 
   // Rebuild the candidate list only when nodes are added or removed.
   var refocusTimer = 0;
@@ -90,6 +90,23 @@
   // The part of an element's box that is not cut off by an overflow:hidden or
   // clip ancestor. Scroll containers do not cut: their hidden items are
   // reachable, and reveal() scrolls them into view.
+  // Per-scan memo of each ancestor's overflow: shared ancestors are read once.
+  var ovMemo = null;
+  function overflowOf(n) {
+    if (ovMemo) {
+      var hit = ovMemo.get(n);
+      if (hit) { return hit; }
+    }
+    var cs = window.getComputedStyle(n);
+    var v = {
+      clip: cs.overflowX === 'hidden' || cs.overflowX === 'clip' ||
+            cs.overflowY === 'hidden' || cs.overflowY === 'clip',
+      fixed: cs.position === 'fixed'
+    };
+    if (ovMemo) { ovMemo.set(n, v); }
+    return v;
+  }
+
   function visibleBox(el) {
     if (el.disabled || el.getAttribute('aria-hidden') === 'true') { return null; }
     var r = el.getBoundingClientRect();
@@ -110,9 +127,8 @@
     // inside a collapsed wrapper), and a fixed ancestor cuts off what is above it.
     var n = st.position === 'fixed' ? null : el.parentElement;
     while (n && n !== document.body && n !== document.documentElement) {
-      var ps = window.getComputedStyle(n);
-      if (ps.overflowX === 'hidden' || ps.overflowX === 'clip' ||
-          ps.overflowY === 'hidden' || ps.overflowY === 'clip') {
+      var ps = overflowOf(n);
+      if (ps.clip) {
         var c = n.getBoundingClientRect();
         b.left = Math.max(b.left, c.left);
         b.top = Math.max(b.top, c.top);
@@ -120,7 +136,7 @@
         b.bottom = Math.min(b.bottom, c.bottom);
         if (b.right - b.left < 16 || b.bottom - b.top < 16) { return null; }
       }
-      if (ps.position === 'fixed') { break; }
+      if (ps.fixed) { break; }
       n = n.parentElement;
     }
     return b;
@@ -242,9 +258,12 @@
   // Visible targets, off-screen ones included so that moving down past the
   // fold reaches the next row. Inside a card or a link is part of that target.
   // A control that wraps other controls is dropped: the innermost one wins.
-  function targets() {
-    var list = elements(), out = [], keep = [], i, e, b, t, p, depth, r;
-    var top = -window.innerHeight * 2, bottom = window.innerHeight * 3;
+  // band: how many screens above and below the viewport to consider.
+  function targets(band) {
+    var list = elements(), out = [], keep = [], i, e, b, t, p, depth, n, r;
+    var k = band || 3;
+    var top = -window.innerHeight * (k - 1), bottom = window.innerHeight * k;
+    ovMemo = new Map();
     for (i = 0; i < list.length; i++) {
       e = list[i];
       r = e.el.getBoundingClientRect();
@@ -257,22 +276,31 @@
                    cx: (b.left + b.right) / 2, cy: (b.top + b.bottom) / 2 });
       }
     }
-    // One stop per tile: a card inside a card of the same width is the same
-    // object, so the outer card wins.
-    for (i = 0; i < out.length; i++) {
-      if (!out[i].card) { continue; }
-      for (var j = 0; j < out.length; j++) {
-        if (i !== j && out[j].card && out[j].el.contains(out[i].el) &&
-            (out[j].b.right - out[j].b.left) <= (out[i].b.right - out[i].b.left) * 1.2) {
-          out[i].dropped = true;
-          break;
-        }
-      }
-    }
+    // Wrappers: a control holding another control is not a stop itself.
     for (i = 0; i < out.length; i++) {
       p = out[i].el.parentElement; depth = 0;
       while (p && depth < 12) {
         if (p.__ompT === 1 && p.tagName !== 'A') { p.__ompW = 1; }
+        p = p.parentElement; depth++;
+      }
+    }
+    // One stop per tile: a card nested in a card of about the same width is the
+    // same object, so the outer one wins. Ancestors only: O(cards x depth).
+    for (i = 0; i < out.length; i++) {
+      if (!out[i].card) { continue; }
+      p = out[i].el.parentElement; depth = 0;
+      while (p && depth < 12) {
+        if (p.__ompT === 2) {
+          for (n = 0; n < out.length; n++) {
+            if (out[n].el === p) {
+              if ((out[n].b.right - out[n].b.left) <= (out[i].b.right - out[i].b.left) * 1.2) {
+                out[i].dropped = true;
+              }
+              break;
+            }
+          }
+          break;
+        }
         p = p.parentElement; depth++;
       }
     }
@@ -282,6 +310,7 @@
       if (t.card || (!t.el.__ompW && !inside(t.el))) { keep.push(t); }
     }
     for (i = 0; i < out.length; i++) { out[i].el.__ompT = 0; out[i].el.__ompW = 0; }
+    ovMemo = null;
     var modal = modalRoot(), inModal = [];
     if (modal) {
       for (i = 0; i < keep.length; i++) {
@@ -394,9 +423,16 @@
   // the distance counts once, across it twice: a control straight below beats
   // a closer one that sits off to the side.
   function nearest(dx, dy, skip) {
+    // the screen first; the wider band only when nothing lines up in this direction
+    var found = pickNearest(targets(1.3), dx, dy, skip);
+    if (!found) { found = pickNearest(targets(4), dx, dy, skip); }
+    return found;
+  }
+
+  function pickNearest(list, dx, dy, skip) {
     var fx = (focusedBox.left + focusedBox.right) / 2;
     var fy = (focusedBox.top + focusedBox.bottom) / 2;
-    var list = targets(), bestIn = null, scoreIn = Infinity, bestOut = null, scoreOut = Infinity;
+    var bestIn = null, scoreIn = Infinity, bestOut = null, scoreOut = Infinity;
     var i, t, ox, oy, main, cross, s, inColumn;
     for (i = 0; i < list.length; i++) {
       t = list[i];

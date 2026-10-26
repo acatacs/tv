@@ -54,6 +54,7 @@ public class Main extends Activity implements UrlBar.Submit {
 
     static final long FULLSCREEN_FALLBACK_MS = 450;
     static final long HINT_MS = 4000;
+    static final long CURSOR_IDLE_MS = 2000;
 
     static final String[] AD_HOSTS = {
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
@@ -93,6 +94,7 @@ public class Main extends Activity implements UrlBar.Submit {
     LinearLayout chooser;
     boolean cursorMode;
     float curX, curY, curVx, curVy;
+    long cursorMovedAt;   // last time the cursor moved: fullscreen hides it after idling
     int held;             // bit set per D-pad direction held in cursor mode
     int holdFrames;
     final Runnable cursorTick = new CursorTick(this);
@@ -534,7 +536,8 @@ public class Main extends Activity implements UrlBar.Submit {
         if ((held & 2) != 0) dx += 1;
         if ((held & 4) != 0) dy -= 1;
         if ((held & 8) != 0) dy += 1;
-        if (dx != 0 || dy != 0) holdFrames++; else holdFrames = 0;
+        if (dx != 0 || dy != 0) { holdFrames++; cursorMovedAt = SystemClock.uptimeMillis(); }
+        else holdFrames = 0;
         float ramp = Math.min(1f, holdFrames / 45f);
         float speed = dens * (3f + 16f * ramp * ramp);
         float tx = dx * speed, ty = dy * speed;
@@ -543,7 +546,15 @@ public class Main extends Activity implements UrlBar.Submit {
         curX = Math.max(0, Math.min(web.getWidth() - 1, curX + curVx));
         curY = Math.max(0, Math.min(web.getHeight() - 1, curY + curVy));
         cursor.place(curX, curY);
-        if (Math.abs(curVx) > 0.3f || Math.abs(curVy) > 0.3f) hoverAt(curX, curY);
+        if (Math.abs(curVx) > 0.3f || Math.abs(curVy) > 0.3f) {
+            hoverAt(curX, curY);
+            cursorMovedAt = SystemClock.uptimeMillis();
+        }
+        // fullscreen: like a PC pointer, the ring hides when idle and returns on movement
+        boolean idle = fullscreen && SystemClock.uptimeMillis() - cursorMovedAt > CURSOR_IDLE_MS;
+        float want = idle ? 0f : 1f;
+        if (cursor.getAlpha() != want) cursor.animate().cancel();
+        if (cursor.getAlpha() != want) cursor.animate().alpha(want).setDuration(220).start();
         // at the top or bottom edge, holding the direction scrolls like a wheel
         float edge = 130 * dens;
         if (dy != 0 && ((dy < 0 && curY < edge) || (dy > 0 && curY > web.getHeight() - edge))) {
