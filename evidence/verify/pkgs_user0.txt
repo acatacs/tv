@@ -1,0 +1,19 @@
+=== all ===
+180
+=== system ===
+177
+=== third ===
+3
+=== disabled ===
+5
+=== uninstalled_remaining ===
+190
+=== check8 ===
+com.wbd.stream: 0
+com.disney.disneyplus: 0
+com.google.android.youtube.tvunplugged: 0
+com.hulu.livingroomplus: 0
+com.apple.atve.androidtv.appletv: 0
+com.peacocktv.peacockandroid: 0
+com.tubitv: 0
+com.instagram.airwave: 0

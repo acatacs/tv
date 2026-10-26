@@ -1,0 +1,6 @@
+=== RESOLVER ===
+priority=2 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.apps.tv.launcherx/.home.HomeActivity
+=== HOME + TOP ===
+      topResumedActivity=ActivityRecord{8b0fbb8 u0 com.google.android.apps.tv.launcherx/.home.HomeActivity t455}
+  mFocusedApp=ActivityRecord{8b0fbb8 u0 com.google.android.apps.tv.launcherx/.home.HomeActivity t455}

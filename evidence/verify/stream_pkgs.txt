@@ -1,0 +1,5 @@
+package:com.amazon.amazonvideo.livingroom
+package:com.netflix.tokenmanager
+package:com.google.android.youtube.tvmusic
+package:com.netflix.ninja
+package:com.google.android.youtube.tv

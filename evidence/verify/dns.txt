@@ -1,0 +1,14 @@
+PING play.googleapis.com (172.217.116.4) 56(84) bytes of data.
+64 bytes from 172.217.116.4: icmp_seq=1 ttl=117 time=19.1 ms
+
+--- play.googleapis.com ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 19.194/19.194/19.194/0.000 ms
+RC1=0
+PING android.l.google.com (142.250.115.139) 56(84) bytes of data.
+64 bytes from rq-in-f139.1e100.net (142.250.115.139): icmp_seq=1 ttl=105 time=107 ms
+
+--- android.l.google.com ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 107.765/107.765/107.765/0.000 ms
+RC2=0

@@ -1,0 +1,8 @@
+No activity found
+---
+      android.intent.action.MAIN:
+        9803af6 com.amazon.amazonvideo.livingroom/com.amazon.ignition.IgnitionActivity filter dd43ef7
+          Action: "android.intent.action.MAIN"
+          Category: "android.intent.category.LEANBACK_LAUNCHER"
+      com.amazon.amazonvideo.livingroom.AMAZON_BUTTON:
+        9803af6 com.amazon.amazonvideo.livingroom/com.amazon.ignition.IgnitionActivity filter 8984164

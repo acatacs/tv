@@ -1,0 +1,16 @@
+com.wbd.stream: 0
+com.disney.disneyplus: 0
+com.google.android.youtube.tvunplugged: 0
+com.hulu.livingroomplus: 0
+com.apple.atve.androidtv.appletv: 0
+com.peacocktv.peacockandroid: 0
+com.tubitv: 0
+com.instagram.airwave: 0
+=== disable-state check ===
+com.apps.mk.gameui:     User 0: ceDataInode=2248 installed=true hidden=false suspended=false distractionFlags=0 stopped=false notLaunched=false enabled=3 instant=false virtual=false
+com.google.android.syncadapters.calendar:     User 0: ceDataInode=2326 installed=true hidden=false suspended=false distractionFlags=0 stopped=false notLaunched=false enabled=3 instant=false virtual=false
+Failed to write while dumping service package: Broken pipe
+com.realtek.karaoke.userguide:     User 0: ceDataInode=2152 installed=true hidden=false suspended=false distractionFlags=0 stopped=false notLaunched=false enabled=3 instant=false virtual=false
+com.seraphic.media.tv.interactive.app:     User 0: ceDataInode=2284 installed=true hidden=false suspended=false distractionFlags=0 stopped=false notLaunched=false enabled=3 instant=false virtual=false
+Failed to write while dumping service package: Broken pipe
+com.apps.wifihotspot:     User 0: ceDataInode=2446 installed=true hidden=false suspended=false distractionFlags=0 stopped=false notLaunched=false enabled=3 instant=false virtual=false

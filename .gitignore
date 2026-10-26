@@ -1,0 +1,24 @@
+# Build output
+build/
+*.idsig
+
+# Keystore is committed on purpose: it only signs a throwaway app installed via
+# ADB on a single TV. Never reuse it for anything distributed.
+!src/ks.jks
+
+# Large upstream APKs fetched by hand; see README for the download URLs
+apk/fennec-*.apk
+apk/BraveMonoarm.apk
+
+# Local evidence dumps
+evidence/raw/
+evidence/shots/
+# Raw logcat dumps are large and reproducible; keep only the analyses
+evidence/**/logcat_*.txt
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

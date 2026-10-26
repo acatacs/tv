@@ -1,0 +1,14 @@
+=== PKG_S ===
+180
+=== PKG_3 ===
+package:org.mozilla.fennec_fdroid
+package:com.omp.tvbrowser
+package:com.omp.tvweb
+=== PKG_D ===
+package:com.apps.mk.gameui
+package:com.google.android.syncadapters.calendar
+package:com.seraphic.media.tv.interactive.app
+package:com.apps.wifihotspot
+package:com.realtek.karaoke.userguide
+=== PKG_U ===
+190

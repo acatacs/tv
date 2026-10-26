@@ -1,0 +1,17 @@
+=== loadavg ===
+22.19 22.90 21.54 4/2165 3540
+=== free ===
+		total        used        free      shared     buffers
+Mem:             1851        1583         267           9           1
+-/+ buffers/cache:           1582         268
+Swap:             999         499         500
+=== procs ===
+346
+=== meminfo ===
+Total RAM: 1,895,540K (status normal)
+ Free RAM:   651,014K (  111,182K cached pss +   202,144K cached kernel +   337,688K free)
+ Used RAM: 1,592,072K (1,040,508K used pss +   551,564K kernel)
+ Lost RAM:    78,588K
+     ZRAM:    69,848K physical used for   497,572K in swap (1,023,996K total swap)
+=== cpu ===
+60% TOTAL: 40% user + 20% kernel + 0.1% iowait + 0% softirq

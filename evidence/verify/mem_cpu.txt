@@ -1,0 +1,9 @@
+Total RAM: 1,895,540K (status normal)
+ Free RAM: 1,070,031K (  427,571K cached pss +   107,312K cached kernel +   535,148K free)
+ Used RAM: 1,286,619K (  840,631K used pss +   445,988K kernel)
+ Lost RAM:    51,243K
+     ZRAM:   146,788K physical used for   665,852K in swap (1,023,996K total swap)
+=== CPU ===
+79% TOTAL: 45% user + 33% kernel + 0% iowait + 0.4% softirq
+=== THREADS ===
+2135

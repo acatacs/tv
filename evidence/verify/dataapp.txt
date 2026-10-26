@@ -1,0 +1,3 @@
+ls: /data/app: Permission denied
+=== count ===
+0

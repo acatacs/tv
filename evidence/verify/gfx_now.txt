@@ -1,0 +1,7 @@
+Total frames rendered: 17442
+Janky frames: 603 (3.46%)
+Janky frames (legacy): 7956 (45.61%)
+=== uptime ===
+7950.69 21088.06
+=== loadavg ===
+22.87 23.05 21.57 7/2155 3520

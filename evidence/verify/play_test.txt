@@ -1,0 +1,23 @@
+Starting: Intent { cmp=com.android.vending/com.google.android.finsky.activities.MainActivity }
+
+Exception occurred while executing 'start':
+java.lang.SecurityException: Permission Denial: starting Intent { flg=0x10000000 cmp=com.android.vending/com.google.android.finsky.activities.MainActivity } from null (pid=2941, uid=2000) not exported from uid 10075
+	at com.android.server.wm.ActivityTaskSupervisor.checkStartAnyActivityPermission(ActivityTaskSupervisor.java:1136)
+	at com.android.server.wm.ActivityStarter.executeRequest(ActivityStarter.java:1084)
+	at com.android.server.wm.ActivityStarter.execute(ActivityStarter.java:742)
+	at com.android.server.wm.ActivityTaskManagerService.startActivityAsUser(ActivityTaskManagerService.java:1289)
+	at com.android.server.wm.ActivityTaskManagerService.startActivityAsUser(ActivityTaskManagerService.java:1240)
+	at com.android.server.am.ActivityManagerService.startActivityAsUserWithFeature(ActivityManagerService.java:3248)
+	at com.android.server.am.ActivityManagerShellCommand.runStartActivity(ActivityManagerShellCommand.java:724)
+	at com.android.server.am.ActivityManagerShellCommand.onCommand(ActivityManagerShellCommand.java:233)
+	at com.android.modules.utils.BasicShellCommandHandler.exec(BasicShellCommandHandler.java:97)
+	at android.os.ShellCommand.exec(ShellCommand.java:38)
+	at com.android.server.am.ActivityManagerService.onShellCommand(ActivityManagerService.java:9759)
+	at android.os.Binder.shellCommand(Binder.java:1068)
+	at android.os.Binder.onTransact(Binder.java:888)
+	at android.app.IActivityManager$Stub.onTransact(IActivityManager.java:5291)
+	at com.android.server.am.ActivityManagerService.onTransact(ActivityManagerService.java:2720)
+	at android.os.Binder.execTransactInternal(Binder.java:1344)
+	at android.os.Binder.execTransact(Binder.java:1275)
+    topResumedActivity=ActivityRecord{a482cea u0 com.omp.tvweb/.Main t509}
+PLAY_DONE

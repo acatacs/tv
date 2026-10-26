@@ -1,0 +1,16 @@
+{
+ "loadavg": "17.58 18.23 18.88 1/2137 4165",
+ "mem": "total        used        free      shared     buffers\nMem:             1851        1590         260           5           1\n-/+ buffers/cache:           1589         261\nSwap:             999         439         560",
+ "meminfo": "Total PSS by process:\nTotal PSS by OOM adjustment:\nTotal PSS by category:\nTotal RAM: 1,895,540K (status normal)\n Free RAM:   563,998K (  196,710K cached pss +   115,944K cached kernel +   251,344K free)\n Used RAM: 1,418,499K (  968,023K used pss +   450,476K kernel)\n Lost RAM:   254,175K\n     ZRAM:    49,532K physical used for   442,112K in swap (1,023,996K total swap)",
+ "cpuinfo": "+0% 4172/grep: 0% user + 0% kernel\n +0% 4175/kworker/0:1: 0% user + 0% kernel\n12% TOTAL: 1% user + 8.5% kernel + 0.3% iowait + 2.3% softirq",
+ "df": "Filesystem       Size Used Avail Use% Mounted on\n/dev/block/dm-48 9.1G 2.4G  6.5G  28% /data/user/0",
+ "pkgs_s": 177,
+ "pkgs_3": 8,
+ "pkgs_d": 0,
+ "procs": 326,
+ "threads": 2143,
+ "anim": "window_animation_scale=1.0\ntransition_animation_scale=1.0\nanimator_duration_scale=null",
+ "gfx_launcher": "Total frames rendered: 5518\nJanky frames: 313 (5.67%)\nFailed to write while dumping service gfxinfo: Broken pipe",
+ "uptime": "4750.77 13152.49",
+ "app_mem_total": "Used RAM: 1,420,854K (  970,382K used pss +   450,472K kernel)"
+}

@@ -1,0 +1,3 @@
+Starting: Intent { cmp=com.google.android.youtube.tv/com.google.android.apps.youtube.tv.activity.ShellActivity }
+    topResumedActivity=ActivityRecord{a4ec06 u0 com.google.android.youtube.tv/com.google.android.apps.youtube.tv.activity.MainActivity t508}
+YT_DONE

@@ -1,0 +1,15 @@
+=== UPTIME ===
+ 15:47:29 up  2:10,  0 users,  load average: 24.54, 22.64, 21.17
+=== LOADAVG ===
+24.54 22.64 21.17 11/2358 6705
+=== FREE ===
+		total        used        free      shared     buffers
+Mem:             1851        1556         294           3           0
+-/+ buffers/cache:           1555         295
+Swap:             999         760         239
+=== PROCS ===
+341
+=== ANIM ===
+window_animation_scale=0.5
+transition_animation_scale=0.5
+animator_duration_scale=0.5
