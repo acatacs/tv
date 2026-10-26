@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Cine TV</string>
+    <string name="load_failed">Couldn\'t load · OK to retry</string>
+    <string name="hint_red">Red button: type an address</string>
+    <string name="search_hint">Search a movie, series or address</string>
+    <string name="go">Go</string>
+    <string name="home">Home</string>
+    <string name="menu_search">Search</string>
+    <string name="menu_search_sub">Type an address or search</string>
+    <string name="menu_cursor">Cursor</string>
+    <string name="menu_cursor_sub">Move the pointer and click with OK</string>
+    <string name="menu_tabs">Tabs</string>
+    <string name="menu_tabs_sub">Coming soon</string>
+</resources>

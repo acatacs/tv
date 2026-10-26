@@ -132,7 +132,7 @@
   function elements() {
     if (cache && (!dirty || Date.now() - built < REBUILD_MS)) { return cache; }
     built = Date.now();
-    var pointer = new WeakMap(), out = [], seen = new WeakSet(), all, i, el, parent, card;
+    var pointer = new WeakMap(), out = [], seen = new WeakSet(), all, i, el, parent, card, tile;
     all = document.body ? document.body.getElementsByTagName('*') : [];
     for (i = 0; i < all.length; i++) {
       el = all[i];
@@ -144,10 +144,27 @@
       card = pointer.get(el) && !(parent && pointer.get(parent)) && !el.matches(SELECTOR) &&
              el.querySelectorAll('a[href]').length < 2 &&
              (el.textContent.trim().length > 0 || !!el.querySelector('img,svg,picture'));
-      if (card || el.matches(SELECTOR)) {
-        el.__ompC = card ? 1 : 0;
-        out.push({ el: el, card: !!card });
-        if (!card) { promote(el, out, seen); }
+      if (card) {
+        // the pointer layer can be a strip inside the tile: grow to the whole tile
+        var tile = growTile(el);
+        if (!seen.has(tile)) {
+          seen.add(tile);
+          tile.__ompC = 1;
+          out.push({ el: tile, card: true });
+        }
+      } else if (el.matches(SELECTOR)) {
+        // a title link under a poster: its tile is the target
+        if (el.tagName === 'A' && el.getBoundingClientRect().height < 60) {
+          var poster = growTile(el);
+          if (poster !== el && !seen.has(poster)) {
+            seen.add(poster);
+            poster.__ompC = 1;
+            out.push({ el: poster, card: true });
+          }
+        }
+        el.__ompC = 0;
+        out.push({ el: el, card: false });
+        promote(el, out, seen);
       }
     }
     cache = out;
@@ -171,6 +188,35 @@
     if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) { return false; }
     var hit = document.elementFromPoint(x, y);
     return !!hit && hit !== el && !el.contains(hit) && !hit.contains(el);
+  }
+
+  // The tile of a card or a title link: climb while the ancestor holds a single
+  // link and fits the screen, and keep the largest one that shows a poster.
+  // Without a poster in reach, the element itself is the tile.
+  // Links that point somewhere different: a poster and its title link to the
+  // same title, so they count as one object. A list counts each of its items.
+  function distinctLinks(el) {
+    var links = el.querySelectorAll('a[href]'), seenHref = {}, n = 0, i, h;
+    for (i = 0; i < links.length; i++) {
+      h = links[i].getAttribute('href');
+      if (/\/year\//.test(h)) { continue; }   // a year badge is not another title
+      if (!seenHref[h]) { seenHref[h] = 1; n++; }
+    }
+    return n;
+  }
+
+  function growTile(el) {
+    var host = el, best = el, k = 0;
+    while (k < 6 && host.parentElement && host.parentElement !== document.body) {
+      var p = host.parentElement;
+      if (distinctLinks(p) > 1) { break; }
+      var r = p.getBoundingClientRect();
+      if (r.width > window.innerWidth * 0.9 || r.height > window.innerHeight * 0.95) { break; }
+      if (p.querySelector('img') && r.height >= 150) { best = p; }
+      host = p;
+      k++;
+    }
+    return best;
   }
 
   // A link too small to aim at (a title under a poster) belongs to the tile
@@ -211,6 +257,18 @@
                    cx: (b.left + b.right) / 2, cy: (b.top + b.bottom) / 2 });
       }
     }
+    // One stop per tile: a card inside a card of the same width is the same
+    // object, so the outer card wins.
+    for (i = 0; i < out.length; i++) {
+      if (!out[i].card) { continue; }
+      for (var j = 0; j < out.length; j++) {
+        if (i !== j && out[j].card && out[j].el.contains(out[i].el) &&
+            (out[j].b.right - out[j].b.left) <= (out[i].b.right - out[i].b.left) * 1.2) {
+          out[i].dropped = true;
+          break;
+        }
+      }
+    }
     for (i = 0; i < out.length; i++) {
       p = out[i].el.parentElement; depth = 0;
       while (p && depth < 12) {
@@ -220,6 +278,7 @@
     }
     for (i = 0; i < out.length; i++) {
       t = out[i];
+      if (t.dropped) { continue; }
       if (t.card || (!t.el.__ompW && !inside(t.el))) { keep.push(t); }
     }
     for (i = 0; i < out.length; i++) { out[i].el.__ompT = 0; out[i].el.__ompW = 0; }

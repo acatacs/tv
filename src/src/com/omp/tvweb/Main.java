@@ -1,8 +1,10 @@
 package com.omp.tvweb;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -14,6 +16,8 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -28,7 +32,9 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.io.BufferedReader;
@@ -45,8 +51,6 @@ public class Main extends Activity implements UrlBar.Submit {
     static final String HOME = "https://lamovie.org";
 
     // Pill texts. Escapes keep the source ASCII whatever the build locale is.
-    static final String FAILED = "No se pudo cargar · OK para reintentar";
-    static final String HINT = "Botón rojo: escribir una dirección";
 
     static final long FULLSCREEN_FALLBACK_MS = 450;
     static final long HINT_MS = 4000;
@@ -85,6 +89,13 @@ public class Main extends Activity implements UrlBar.Submit {
     FrameLayout videoHolder;
     TextView status;
     View progress;
+    CursorView cursor;
+    LinearLayout chooser;
+    boolean cursorMode;
+    float curX, curY, curVx, curVy;
+    int held;             // bit set per D-pad direction held in cursor mode
+    int holdFrames;
+    final Runnable cursorTick = new CursorTick(this);
 
     final Handler h = new Handler();
     final Set<String> adSet = new HashSet<String>();
@@ -178,7 +189,7 @@ public class Main extends Activity implements UrlBar.Submit {
         public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
             if (req.isForMainFrame()) {
                 a.loadFailed = true;
-                a.showStatus(FAILED);
+                a.showStatus(a.getString(R.string.load_failed));
             }
         }
     }
@@ -283,6 +294,17 @@ public class Main extends Activity implements UrlBar.Submit {
         blp.topMargin = (int) (24 * dens);
         root.addView(urlBar, blp);
 
+        // cursor mode: a ring that glides with the D-pad, OK clicks where it is
+        cursor = new CursorView(this, dens);
+        cursor.setVisibility(View.GONE);
+        root.addView(cursor, new FrameLayout.LayoutParams(-2, -2));
+
+        // MENU: choose between search, tabs and the cursor
+        chooser = buildChooser();
+        chooser.setVisibility(View.GONE);
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
+        root.addView(chooser, clp);
+
         setContentView(root);
         web.requestFocus();
         web.loadUrl(HOME);
@@ -338,7 +360,7 @@ public class Main extends Activity implements UrlBar.Submit {
         if (hintShown || fullscreen) return;
         hintShown = true;
         hintVisible = true;
-        status.setText(HINT);
+        status.setText(getString(R.string.hint_red));
         status.setVisibility(View.VISIBLE);
         h.postDelayed(new HintTimeout(this), HINT_MS);
     }
@@ -414,6 +436,220 @@ public class Main extends Activity implements UrlBar.Submit {
     void hideUrlBar() {
         urlBar.setVisibility(View.GONE);
         web.requestFocus();
+    }
+
+    // ======================= menú (MENU) =======================
+    LinearLayout buildChooser() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (22 * dens);
+        box.setPadding(pad, pad, pad, pad);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xF2121A22);
+        bg.setCornerRadius(28f * dens);
+        bg.setStroke((int) (1 * dens), 0x33FFFFFF);
+        box.setBackground(bg);
+        box.addView(menuItem(getString(R.string.menu_search), getString(R.string.menu_search_sub), true, new ChooseSearch(this)));
+        box.addView(menuItem(getString(R.string.menu_cursor), getString(R.string.menu_cursor_sub), true, new ChooseCursor(this)));
+        box.addView(menuItem(getString(R.string.menu_tabs), getString(R.string.menu_tabs_sub), false, null));
+        return box;
+    }
+
+    Button menuItem(String title, String sub, boolean enabled, View.OnClickListener action) {
+        Button b = new Button(this);
+        b.setText(title + "\n" + sub);
+        b.setAllCaps(false);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        b.setTextColor(enabled ? 0xFFE8EAED : 0xFF6E7B87);
+        b.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        b.setStateListAnimator(null);
+        GradientDrawable idle = new GradientDrawable();
+        idle.setColor(0xFF1B232D);
+        idle.setCornerRadius(16f * dens);
+        GradientDrawable focused = new GradientDrawable();
+        focused.setColor(0xFF26323E);
+        focused.setCornerRadius(16f * dens);
+        focused.setStroke((int) (3 * dens), 0xFF22D3EE);
+        android.graphics.drawable.StateListDrawable bg = new android.graphics.drawable.StateListDrawable();
+        bg.addState(new int[] { android.R.attr.state_focused }, focused);
+        bg.addState(new int[] {}, idle);
+        b.setBackground(bg);
+        b.setPadding((int) (24 * dens), (int) (14 * dens), (int) (24 * dens), (int) (14 * dens));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (620 * dens), -2);
+        lp.bottomMargin = (int) (10 * dens);
+        b.setLayoutParams(lp);
+        b.setEnabled(enabled);
+        if (action != null) b.setOnClickListener(action);
+        return b;
+    }
+
+    void showChooser() {
+        chooser.setVisibility(View.VISIBLE);
+        chooser.getChildAt(0).requestFocus();
+    }
+
+    void hideChooser() {
+        chooser.setVisibility(View.GONE);
+        web.requestFocus();
+    }
+
+    static class ChooseSearch implements View.OnClickListener {
+        final Main a;
+        ChooseSearch(Main m) { a = m; }
+        public void onClick(View v) { a.hideChooser(); a.showUrlBar(); }
+    }
+
+    static class ChooseCursor implements View.OnClickListener {
+        final Main a;
+        ChooseCursor(Main m) { a = m; }
+        public void onClick(View v) { a.hideChooser(); a.enterCursor(); }
+    }
+
+    // ======================= modo cursor =======================
+    void enterCursor() {
+        cursorMode = true;
+        curX = web.getWidth() / 2f;
+        curY = web.getHeight() / 2f;
+        curVx = curVy = 0;
+        holdFrames = 0;
+        held = 0;
+        cursor.setVisibility(View.VISIBLE);
+        cursor.place(curX, curY);
+        h.removeCallbacks(cursorTick);
+        h.post(cursorTick);
+    }
+
+    void exitCursor() {
+        cursorMode = false;
+        held = 0;
+        h.removeCallbacks(cursorTick);
+        cursor.setVisibility(View.GONE);
+    }
+
+    // one frame: velocity eases toward the held direction, so the ring
+    // accelerates while held and glides to a stop on release
+    void stepCursor() {
+        int dx = 0, dy = 0;
+        if ((held & 1) != 0) dx -= 1;
+        if ((held & 2) != 0) dx += 1;
+        if ((held & 4) != 0) dy -= 1;
+        if ((held & 8) != 0) dy += 1;
+        if (dx != 0 || dy != 0) holdFrames++; else holdFrames = 0;
+        float ramp = Math.min(1f, holdFrames / 45f);
+        float speed = dens * (3f + 16f * ramp * ramp);
+        float tx = dx * speed, ty = dy * speed;
+        curVx += (tx - curVx) * 0.22f;
+        curVy += (ty - curVy) * 0.22f;
+        curX = Math.max(0, Math.min(web.getWidth() - 1, curX + curVx));
+        curY = Math.max(0, Math.min(web.getHeight() - 1, curY + curVy));
+        cursor.place(curX, curY);
+        if (Math.abs(curVx) > 0.3f || Math.abs(curVy) > 0.3f) hoverAt(curX, curY);
+        // at the top or bottom edge, holding the direction scrolls like a wheel
+        float edge = 130 * dens;
+        if (dy != 0 && ((dy < 0 && curY < edge) || (dy > 0 && curY > web.getHeight() - edge))) {
+            scrollAt(curX, curY, dy * (0.3f + 0.9f * ramp));
+        }
+    }
+
+    // A wheel notch at a point: the page or the scrollable box under it moves.
+    void scrollAt(float x, float y, float notches) {
+        long t = SystemClock.uptimeMillis();
+        MotionEvent.PointerProperties[] props = { new MotionEvent.PointerProperties() };
+        props[0].id = 0;
+        props[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords[] coords = { new MotionEvent.PointerCoords() };
+        coords[0].x = x;
+        coords[0].y = y;
+        coords[0].setAxisValue(MotionEvent.AXIS_VSCROLL, -notches);
+        MotionEvent wheel = MotionEvent.obtain(t, t, MotionEvent.ACTION_SCROLL, 1, props, coords,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+        web.dispatchGenericMotionEvent(wheel);
+        wheel.recycle();
+    }
+
+    void hoverAt(float x, float y) {
+        long t = SystemClock.uptimeMillis();
+        MotionEvent.PointerProperties[] props = { new MotionEvent.PointerProperties() };
+        props[0].id = 0;
+        props[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords[] coords = { new MotionEvent.PointerCoords() };
+        coords[0].x = x;
+        coords[0].y = y;
+        MotionEvent hover = MotionEvent.obtain(t, t, MotionEvent.ACTION_HOVER_MOVE, 1, props, coords,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+        web.dispatchGenericMotionEvent(hover);
+        hover.recycle();
+    }
+
+    void clickCursor() {
+        cursor.pulse();
+        tapView(web, curX, curY);
+    }
+
+    static class CursorTick implements Runnable {
+        final Main a;
+        CursorTick(Main m) { a = m; }
+        public void run() {
+            if (!a.cursorMode) return;
+            a.stepCursor();
+            a.h.postDelayed(this, 16);
+        }
+    }
+
+    // A ring with a dot. It contracts for a moment on click.
+    static class CursorView extends View {
+        final float dens;
+        final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
+        float x, y, pulse;
+        final float size;
+
+        CursorView(Context c, float d) {
+            super(c);
+            dens = d;
+            size = 56 * d;
+            ring.setStyle(Paint.Style.STROKE);
+            ring.setStrokeWidth(3 * d);
+            ring.setColor(0xFF22D3EE);
+            dot.setColor(0xFFFFFFFF);
+            setLayoutParams(new FrameLayout.LayoutParams((int) size, (int) size));
+        }
+
+        void place(float px, float py) {
+            x = px;
+            y = py;
+            setTranslationX(px - size / 2);
+            setTranslationY(py - size / 2);
+            invalidate();
+        }
+
+        void pulse() {
+            pulse = 1f;
+            animate().cancel();
+            invalidate();
+            h().postDelayed(new Settle(this), 16);
+        }
+
+        Handler h() { return getHandler() != null ? getHandler() : new Handler(); }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            float cx = size / 2, cy = size / 2;
+            float r = (size / 2 - 6 * dens) * (1f - 0.22f * pulse);
+            ring.setAlpha(230);
+            c.drawCircle(cx, cy, r, ring);
+            c.drawCircle(cx, cy, 4 * dens, dot);
+        }
+
+        static class Settle implements Runnable {
+            final CursorView v;
+            Settle(CursorView view) { v = view; }
+            public void run() {
+                v.pulse = Math.max(0f, v.pulse - 0.18f);
+                v.invalidate();
+                if (v.pulse > 0f) v.postDelayed(this, 16);
+            }
+        }
     }
 
     // ======================= navegación por foco =======================
@@ -578,12 +814,36 @@ public class Main extends Activity implements UrlBar.Submit {
     @Override
     public boolean dispatchKeyEvent(KeyEvent ev) {
         int code = ev.getKeyCode();
+        if (ev.getAction() == KeyEvent.ACTION_DOWN && ev.getRepeatCount() == 0) {
+        }
         boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
 
-        // address bar: red key, or the Search / Menu keys most remotes have
+        // MENU opens the chooser; SEARCH and the red key open the address bar
+        if (down && ev.getRepeatCount() == 0 && code == KeyEvent.KEYCODE_MENU
+                && urlBar.getVisibility() != View.VISIBLE && chooser.getVisibility() != View.VISIBLE) {
+            showChooser();
+            return true;
+        }
         if (down && ev.getRepeatCount() == 0 && isBarKey(code) && urlBar.getVisibility() != View.VISIBLE) {
             showUrlBar();
             return true;
+        }
+        if (chooser.getVisibility() == View.VISIBLE) {
+            return super.dispatchKeyEvent(ev);
+        }
+
+        // cursor mode: the D-pad moves the ring, OK clicks, nothing reaches the page
+        if (cursorMode) {
+            if (isDpad(code)) {
+                int bit = code == KeyEvent.KEYCODE_DPAD_LEFT ? 1 : code == KeyEvent.KEYCODE_DPAD_RIGHT ? 2
+                        : code == KeyEvent.KEYCODE_DPAD_UP ? 4 : 8;
+                if (down) held |= bit; else held &= ~bit;
+                return true;
+            }
+            if (isOk(code)) {
+                if (down && ev.getRepeatCount() == 0) clickCursor();
+                return true;
+            }
         }
 
         // la barra de URL usa el foco nativo de Android (campo, botón Ir)
@@ -637,6 +897,8 @@ public class Main extends Activity implements UrlBar.Submit {
 
     @Override
     public void onBackPressed() {
+        if (chooser.getVisibility() == View.VISIBLE) { hideChooser(); return; }
+        if (cursorMode) { exitCursor(); return; }
         if (fullscreen) { exitFullscreen(true); return; }
         if (playerMode) { playerMode = false; return; }
         if (urlBar.getVisibility() == View.VISIBLE) { hideUrlBar(); return; }

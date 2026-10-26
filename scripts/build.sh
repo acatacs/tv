@@ -29,6 +29,8 @@ aapt2 link -o "$OUT/base.apk" \
     -I "$JAR" \
     --manifest AndroidManifest.xml \
     -R "$OUT/res.zip" \
+    --java "$OUT/gen" \
+    --auto-add-overlay \
     --min-sdk-version 21 \
     --target-sdk-version 34
 
@@ -36,7 +38,7 @@ echo "[3/6] javac"
 javac -source 8 -target 8 \
     -classpath "$JAR" \
     -d "$OUT/classes" \
-    src/com/omp/tvweb/*.java 2>&1 | grep -viE 'warning|options|bootstrap|deprecat|Note:' || true
+    "$OUT/gen/com/omp/tvweb/R.java" src/com/omp/tvweb/*.java 2>&1 | grep -viE 'warning|options|bootstrap|deprecat|Note:' || true
 
 echo "[4/6] dex"
 d8 --lib "$JAR" --min-api 21 --output "$OUT/dex" "$OUT"/classes/com/omp/tvweb/*.class

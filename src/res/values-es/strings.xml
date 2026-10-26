@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Cine TV</string>
+    <string name="load_failed">No se pudo cargar · OK para reintentar</string>
+    <string name="hint_red">Botón rojo: escribir una dirección</string>
+    <string name="search_hint">Buscar película, serie o dirección</string>
+    <string name="go">Ir</string>
+    <string name="home">Inicio</string>
+    <string name="menu_search">Buscar</string>
+    <string name="menu_search_sub">Escribe una dirección o busca</string>
+    <string name="menu_cursor">Cursor</string>
+    <string name="menu_cursor_sub">Mueve el puntero y haz clic con OK</string>
+    <string name="menu_tabs">Pestañas</string>
+    <string name="menu_tabs_sub">Próximamente</string>
+</resources>

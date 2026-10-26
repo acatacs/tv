@@ -45,7 +45,7 @@ public class UrlBar extends LinearLayout {
         bg.setStroke((int) (1 * d), 0x33FFFFFF);
         setBackground(bg);
 
-        home = pill(c, d, "Inicio");
+        home = pill(c, d, c.getString(R.string.home));
         home.setVisibility(GONE);
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-2, -2);
         hlp.rightMargin = (int) (10 * d);
@@ -56,7 +56,7 @@ public class UrlBar extends LinearLayout {
         field.setSingleLine(true);
         field.setTextColor(0xFFFFFFFF);
         field.setHintTextColor(0xFF7A8794);
-        field.setHint("Buscar película, serie o dirección");
+        field.setHint(c.getString(R.string.search_hint));
         field.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
         field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         field.setImeOptions(EditorInfo.IME_ACTION_GO);
@@ -64,7 +64,7 @@ public class UrlBar extends LinearLayout {
         field.setPadding((int) (12 * d), (int) (8 * d), (int) (12 * d), (int) (8 * d));
         addView(field, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        go = pill(c, d, "Ir");
+        go = pill(c, d, c.getString(R.string.go));
         go.setTextColor(0xFF06222A);
         GradientDrawable gb = new GradientDrawable();
         gb.setColor(0xFF22D3EE);
