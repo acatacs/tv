@@ -50,7 +50,7 @@ public class UrlBar extends LinearLayout {
         field.setSingleLine(true);
         field.setTextColor(0xFFFFFFFF);
         field.setHintTextColor(0xFF7A8794);
-        field.setHint("Escribe una direccion o busca");
+        field.setHint("Escribe una dirección o busca");
         field.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         field.setImeOptions(EditorInfo.IME_ACTION_GO);
@@ -73,9 +73,9 @@ public class UrlBar extends LinearLayout {
         addView(row, new LinearLayout.LayoutParams(-1, -2));
 
         TextView tip = new TextView(c);
-        tip.setText("OK confirma   ·   ATRAS cierra");
-        tip.setTextColor(0xFF6E7B87);
-        tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tip.setText("OK confirma   ·   ATRÁS cierra");
+        tip.setTextColor(0xFFA3AEB9);
+        tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         tip.setPadding((int) (8 * d), (int) (8 * d), 0, 0);
         addView(tip);
 

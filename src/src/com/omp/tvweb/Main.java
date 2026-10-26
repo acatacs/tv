@@ -2,13 +2,16 @@ package com.omp.tvweb;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -16,24 +19,37 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
+import android.widget.TextView;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.util.HashSet;
 import java.util.Set;
 
-public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
+public class Main extends Activity implements UrlBar.Submit {
 
+    static final String TAG = "TVWEB";
     static final String HOME = "https://lamovie.org";
-    static final int ACCENT = 0xFF4FC3F7;
-    static final int ACCENT_DIM = 0xCCB0BEC5;
+
+    // Pill texts. Escapes keep the source ASCII whatever the build locale is.
+    static final String LOADING = "Cargando…";
+    static final String FAILED = "No se pudo cargar · OK para reintentar";
+    static final String HINT = "Botón rojo: escribir una dirección";
+
+    static final long FULLSCREEN_FALLBACK_MS = 450;
+    static final long HINT_MS = 4000;
 
     static final String[] AD_HOSTS = {
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
@@ -63,89 +79,26 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
         "tsyndicate.com", "trafficstars.com", "adsco.re"
     };
 
-    // ---- vistas ----
     FrameLayout root;
     WebView web;
     UrlBar urlBar;
-    HighlightView hilite;
-    ImageView cursor;
     FrameLayout videoHolder;
+    TextView status;
 
-    // ---- estado del puntero ----
-    float cx, cy;              // posición real (destino)
-    float sx, sy;              // posición suavizada (dibujada)
-    int vw, vh;
-    float dens;
-    boolean pressed;
-    final Set<Integer> held = new HashSet<Integer>();
     final Handler h = new Handler();
-    boolean cursorVisible = true;
-
-    boolean bridgeOk = false;
-    boolean fullscreen = false;
-    int hilW = -1, hilH = -1;
-
     final Set<String> adSet = new HashSet<String>();
-
-    // ======================= bridge =======================
-    public void onHover(final int x, final int y, final int w, final int hh,
-                        final int vis, final int over) {
-        android.util.Log.d("TVWEB", "hover " + x + "," + y + " " + w + "x" + hh + " vis=" + vis);
-        runOnUiThread(new HoverApply(this, x, y, w, hh, vis, over));
-    }
-
-    public void onReady(boolean ok) {
-        bridgeOk = ok;
-        android.util.Log.d("TVWEB", "bridge ready=" + ok);
-    }
-
-    static class HoverApply implements Runnable {
-        final Main a; final int x, y, w, hh, vis, over;
-        HoverApply(Main m, int x, int y, int w, int hh, int vis, int over) {
-            a = m; this.x = x; this.y = y; this.w = w; this.hh = hh;
-            this.vis = vis; this.over = over;
-        }
-        public void run() {
-            if (a.hilite == null) return;
-            if (a.fullscreen || vis == 0 || w < 6 || hh < 6) {
-                a.hilite.setVisibility(View.INVISIBLE);
-                return;
-            }
-            int top = y + over;
-            int height = hh - over;
-            if (top < 0) { height += top; top = 0; }
-            if (height < 6) { a.hilite.setVisibility(View.INVISIBLE); return; }
-
-            int pad = (int) (4 * a.dens);
-            int nw = w + pad * 2;
-            int nh = height + pad * 2;
-            int nx = x - pad;
-            int ny = top - pad;
-
-            if (nw == a.hilW && nh == a.hilH) {
-                a.hilite.setTranslationX(nx);
-                a.hilite.setTranslationY(ny);
-            } else {
-                a.hilW = nw;
-                a.hilH = nh;
-                FrameLayout.LayoutParams lp =
-                        (FrameLayout.LayoutParams) a.hilite.getLayoutParams();
-                lp.width = nw;
-                lp.height = nh;
-                a.hilite.setLayoutParams(lp);
-                a.hilite.setTranslationX(nx);
-                a.hilite.setTranslationY(ny);
-            }
-            if (a.hilite.getVisibility() != View.VISIBLE) {
-                a.hilite.setVisibility(View.VISIBLE);
-            }
-        }
-    }
+    float dens;
+    boolean fullscreen;
+    boolean loadFailed;
+    boolean hintShown;
+    boolean hintVisible;
+    WebChromeClient.CustomViewCallback customCb;
+    String navSource;
 
     // ======================= web client =======================
-    static class AdBlockClient extends WebViewClient {
+    static class PageClient extends WebViewClient {
         final Main a;
-        AdBlockClient(Main m) { a = m; }
+        PageClient(Main m) { a = m; }
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -175,16 +128,32 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
         }
 
         @Override
+        public void onPageStarted(WebView v, String url, Bitmap icon) {
+            a.loadFailed = false;
+            a.showStatus(LOADING);
+        }
+
+        @Override
         public void onPageFinished(WebView v, String url) {
             if (a.urlBar != null) a.urlBar.setUrl(url);
+            // onReceivedError runs before this; keep its message on screen.
+            if (a.loadFailed) return;
+            a.hideStatus();
+            a.injectNav();
             a.web.requestFocus();
-            a.installProbe();
-            a.probe();
+            a.showHint();
+        }
+
+        @Override
+        public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
+            if (req.isForMainFrame()) {
+                a.loadFailed = true;
+                a.showStatus(FAILED);
+            }
         }
     }
 
     static class Chrome extends WebChromeClient {
-
         final Main a;
         Chrome(Main m) { a = m; }
 
@@ -200,7 +169,7 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
 
         @Override
         public void onHideCustomView() {
-            a.exitFullscreen();
+            a.exitFullscreen(false);
         }
     }
 
@@ -209,15 +178,11 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        for (int i = 0; i < AD_HOSTS.length; i++) adSet.add(AD_HOSTS[i]);
+        WebView.setWebContentsDebuggingEnabled(true); // DEBUG-TEMP
+        for (String host : AD_HOSTS) adSet.add(host);
 
         dens = getResources().getDisplayMetrics().density;
-        vw = getResources().getDisplayMetrics().widthPixels;
-        vh = getResources().getDisplayMetrics().heightPixels;
-        cx = vw * 0.5f;
-        cy = vh * 0.45f;
-        sx = cx;
-        sy = cy;
+        int vw = getResources().getDisplayMetrics().widthPixels;
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -244,10 +209,8 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
         s.setUserAgentString("Mozilla/5.0 (Linux; Android 14; SmartTV) AppleWebKit/537.36 "
                 + "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36");
 
-        web.addJavascriptInterface(new NativeBridge(this), "omp");
-        web.setWebViewClient(new AdBlockClient(this));
+        web.setWebViewClient(new PageClient(this));
         web.setWebChromeClient(new Chrome(this));
-        web.loadUrl(HOME);
         root.addView(web, new FrameLayout.LayoutParams(-1, -1));
 
         // capa de video a pantalla completa
@@ -256,16 +219,13 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
         videoHolder.setVisibility(View.GONE);
         root.addView(videoHolder, new FrameLayout.LayoutParams(-1, -1));
 
-        // resaltado
-        hilite = new HighlightView(this, ACCENT, dens);
-        hilite.setVisibility(View.INVISIBLE);
-        root.addView(hilite, new FrameLayout.LayoutParams(0, 0));
-
-        // puntero
-        cursor = new ImageView(this);
-        cursor.setImageDrawable(new ArrowCursor(19f * dens));
-        root.addView(cursor, new FrameLayout.LayoutParams(
-                (int) (19f * dens * 1.05f), (int) (19f * dens * 1.55f)));
+        // estado: carga, error y pista. Abajo a la izquierda, dentro del area segura
+        status = buildStatus();
+        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
+                -2, -2, Gravity.BOTTOM | Gravity.START);
+        slp.leftMargin = (int) (48 * dens);
+        slp.bottomMargin = (int) (40 * dens);
+        root.addView(status, slp);
 
         // barra de URL
         urlBar = new UrlBar(this);
@@ -279,63 +239,91 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
 
         setContentView(root);
         web.requestFocus();
-
-        h.post(new SmoothLoop(this));
+        web.loadUrl(HOME);
     }
 
-    // ======================= animación del puntero =======================
-    static class SmoothLoop implements Runnable {
+    TextView buildStatus() {
+        TextView t = new TextView(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xDD0B0F14);
+        bg.setCornerRadius(20f * dens);
+        bg.setStroke((int) (1 * dens), 0x33FFFFFF);
+        t.setBackground(bg);
+        t.setTextColor(0xFFE8EAED);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        int ph = (int) (22 * dens), pv = (int) (12 * dens);
+        t.setPadding(ph, pv, ph, pv);
+        t.setVisibility(View.GONE);
+        return t;
+    }
+
+    void showStatus(String text) {
+        hintVisible = false;
+        status.setText(text);
+        status.setVisibility(View.VISIBLE);
+    }
+
+    void hideStatus() {
+        hintVisible = false;
+        status.setVisibility(View.GONE);
+    }
+
+    // Shown once, after the first page, so people learn where the URL bar lives.
+    void showHint() {
+        if (hintShown || fullscreen) return;
+        hintShown = true;
+        hintVisible = true;
+        status.setText(HINT);
+        status.setVisibility(View.VISIBLE);
+        h.postDelayed(new HintTimeout(this), HINT_MS);
+    }
+
+    static class HintTimeout implements Runnable {
         final Main a;
-        SmoothLoop(Main m) { a = m; }
-
+        HintTimeout(Main m) { a = m; }
         public void run() {
-            float k = 0.34f;
-            a.sx += (a.cx - a.sx) * k;
-            a.sy += (a.cy - a.sy) * k;
-            if (Math.abs(a.cx - a.sx) < 0.5f) a.sx = a.cx;
-            if (Math.abs(a.cy - a.sy) < 0.5f) a.sy = a.cy;
-
-            // translation: no provoca relayout, solo composición
-            a.cursor.setTranslationX(a.sx);
-            a.cursor.setTranslationY(a.sy);
-
-            float sc = a.pressed ? 0.88f : 1.0f;
-            a.cursor.setScaleX(sc);
-            a.cursor.setScaleY(sc);
-            a.cursor.setAlpha(a.cursorVisible ? 1f : 0f);
-
-            a.h.postDelayed(this, 16);
+            if (a.hintVisible) a.hideStatus();
         }
     }
 
     // ======================= fullscreen de video =======================
     void enterFullscreen(View v, WebChromeClient.CustomViewCallback cb) {
         if (cb == null) return;
+        if (fullscreen) { cb.onCustomViewHidden(); return; }
         fullscreen = true;
-        cursorVisible = false;
-        hilite.setVisibility(View.INVISIBLE);
+        customCb = cb;
         urlBar.setVisibility(View.GONE);
+        hideStatus();
 
         if (v.getParent() != null) {
             ((ViewGroup) v.getParent()).removeView(v);
         }
         videoHolder.addView(v, new FrameLayout.LayoutParams(-1, -1));
         videoHolder.setVisibility(View.VISIBLE);
-
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-              | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-              | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-              | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        applyImmersive(true);
     }
 
-    void exitFullscreen() {
+    // byUser: the app is leaving fullscreen (BACK). The WebView must be told,
+    // or it refuses the next fullscreen request for the rest of the session.
+    void exitFullscreen(boolean byUser) {
+        if (!fullscreen) return;
         fullscreen = false;
-        cursorVisible = true;
+        WebChromeClient.CustomViewCallback cb = customCb;
+        customCb = null;
+        if (byUser && cb != null) cb.onCustomViewHidden();
         videoHolder.removeAllViews();
         videoHolder.setVisibility(View.GONE);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        applyImmersive(false);
         web.requestFocus();
+    }
+
+    void applyImmersive(boolean on) {
+        getWindow().getDecorView().setSystemUiVisibility(on
+                ? View.SYSTEM_UI_FLAG_FULLSCREEN
+                  | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                  | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                  | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                : View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     }
 
     // ======================= UrlBar.Submit =======================
@@ -353,6 +341,7 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
     }
 
     void showUrlBar() {
+        hideStatus();
         urlBar.setVisibility(View.VISIBLE);
         urlBar.focusField();
     }
@@ -362,8 +351,8 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
         web.requestFocus();
     }
 
-    // ======================= JS =======================
-    void installProbe() {
+    // ======================= navegación por foco =======================
+    void injectNav() {
         web.evaluateJavascript(navScript(), null);
     }
 
@@ -371,237 +360,136 @@ public class Main extends Activity implements NativeBridge.Host, UrlBar.Submit {
         if (navSource != null) return navSource;
         StringBuilder sb = new StringBuilder();
         try {
-            java.io.InputStream in = getAssets().open("tvnav.js");
-            java.io.BufferedReader r = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(in, "UTF-8"));
+            InputStream in = getAssets().open("tvnav.js");
+            BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
             String line;
-            while ((line = r.readLine()) != null) {
-                sb.append(line).append('\n');
-            }
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
             r.close();
-        } catch (Exception e) {
-            android.util.Log.e("TVWEB", "asset tvnav.js missing", e);
+        } catch (IOException e) {
+            Log.e(TAG, "asset tvnav.js missing", e);
         }
         navSource = sb.toString();
         return navSource;
     }
 
-    String navSource;
-
-    void probe() {
-        if (web == null) return;
-        if (probePending) { probeAgain = true; return; }
-        probePending = true;
-
-        int px = Math.round(cx);
-        int py = Math.round(cy);
-        if (px == lastProbeX && py == lastProbeY && !probeAgain) {
-            probePending = false;
-            return;
-        }
-        lastProbeX = px;
-        lastProbeY = py;
-        probeAgain = false;
-
-        web.evaluateJavascript("window.__ompAt?window.__ompAt(" + px + "," + py + "):'NO_PROBE'",
-                new ProbeDone(this));
+    void nav(int dx, int dy) {
+        web.evaluateJavascript("window.__ompNav&&window.__ompNav.move(" + dx + "," + dy + ")",
+                new NavDone());
     }
 
-    boolean probePending = false;
-    boolean probeAgain = false;
-    int lastProbeX = -1, lastProbeY = -1;
-
-    static class ProbeDone implements android.webkit.ValueCallback<String> {
-        final Main a;
-        ProbeDone(Main m) { a = m; }
+    static class NavDone implements ValueCallback<String> {
         public void onReceiveValue(String v) {
-            android.util.Log.d("TVWEB", "probe result=" + v);
-            a.probePending = false;
-            if (a.probeAgain) { a.probeAgain = false; a.probe(); }
+            Log.d(TAG, "nav " + v);
         }
     }
 
-    void click() {
-        float px = cx;
-        float py = cy;
+    void activate() {
+        web.evaluateJavascript("window.__ompNav&&window.__ompNav.tap()", new TapDone(this));
+    }
 
-        // toque real (funciona con reproductores y divs)
+    // Sends a real touch so the page sees a trusted gesture: links follow,
+    // buttons act, and fullscreen requests are allowed.
+    void tapView(View target, float x, float y) {
         long t = SystemClock.uptimeMillis();
-        MotionEvent down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, px, py, 0);
-        web.dispatchTouchEvent(down);
+        MotionEvent down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0);
+        target.dispatchTouchEvent(down);
         down.recycle();
-        MotionEvent up = MotionEvent.obtain(t, t + 55, MotionEvent.ACTION_UP, px, py, 0);
-        web.dispatchTouchEvent(up);
+        MotionEvent up = MotionEvent.obtain(t, t + 60, MotionEvent.ACTION_UP, x, y, 0);
+        target.dispatchTouchEvent(up);
         up.recycle();
+    }
 
-        // además click semántico, por si el sitio usa on('click') sobre el contenedor
-        web.evaluateJavascript("window.__ompClickAt&&window.__ompClickAt("
-                + Math.round(px) + "," + Math.round(py) + ")", null);
+    static class TapDone implements ValueCallback<String> {
+        final Main a;
+        TapDone(Main m) { a = m; }
+        public void onReceiveValue(String v) {
+            if (v == null || "null".equals(v)) return;
+            String[] p = v.replace("\"", "").split(",");
+            if (p.length < 3) return;
+            try {
+                float s = a.web.getScale();
+                float x = Integer.parseInt(p[0]) * s;
+                float y = Integer.parseInt(p[1]) * s;
+                Log.d(TAG, "tap css=" + p[0] + "," + p[1] + " scale=" + s + " media=" + p[2]);
+                a.tapView(a.web, x, y);
+                if ("1".equals(p[2])) {
+                    a.h.postDelayed(new FullscreenFallback(a), FULLSCREEN_FALLBACK_MS);
+                }
+            } catch (NumberFormatException e) {
+                Log.e(TAG, "bad tap reply " + v);
+            }
+        }
+    }
 
-        // si el objetivo es un <video>, intentar pantalla completa
-        web.evaluateJavascript("window.__ompBigVideo&&window.__ompBigVideo()", null);
+    static class FullscreenFallback implements Runnable {
+        final Main a;
+        FullscreenFallback(Main m) { a = m; }
+        public void run() {
+            if (a.fullscreen) return;
+            a.web.evaluateJavascript("window.__ompNav&&window.__ompNav.fullscreen()", null);
+        }
     }
 
     // ======================= teclas =======================
+    static boolean isDpad(int code) {
+        return code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT;
+    }
+
+    static boolean isOk(int code) {
+        return code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+                || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent ev) {
         int code = ev.getKeyCode();
+        boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
 
+        // la barra de URL usa el foco nativo de Android (campo, botón Ir)
+        if (urlBar.getVisibility() == View.VISIBLE) {
+            return super.dispatchKeyEvent(ev);
+        }
+
+        // en vídeo a pantalla completa: OK toca el centro (controles del reproductor)
         if (fullscreen) {
-            // en reproducción: ATRÁS sale, OK/PLAY gestiona, flechas al player
-            if (ev.getAction() == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_BACK) {
-                exitFullscreen();
+            if (down && isOk(code) && ev.getRepeatCount() == 0) {
+                tapView(videoHolder, videoHolder.getWidth() / 2f, videoHolder.getHeight() / 2f);
                 return true;
             }
             return super.dispatchKeyEvent(ev);
         }
 
-        if (urlBar != null && urlBar.getVisibility() == View.VISIBLE) {
-            if (ev.getAction() == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_BACK) {
-                hideUrlBar();
-                return true;
+        // navegación de página: el auto-repeat del mando da el movimiento continuo
+        if (isDpad(code)) {
+            if (down) {
+                int dx = code == KeyEvent.KEYCODE_DPAD_LEFT ? -1
+                        : code == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : 0;
+                int dy = code == KeyEvent.KEYCODE_DPAD_UP ? -1
+                        : code == KeyEvent.KEYCODE_DPAD_DOWN ? 1 : 0;
+                nav(dx, dy);
             }
-            return super.dispatchKeyEvent(ev);
+            return true;
         }
 
-        if (ev.getAction() == KeyEvent.ACTION_DOWN) {
-            if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
-                    || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                if (ev.getRepeatCount() == 0) {
-                    held.add(code);
-                    startMove();
-                }
-                return true;
+        if (isOk(code)) {
+            // consumir también el "up" para que la página no reciba un click suelto
+            if (down && ev.getRepeatCount() == 0) {
+                if (loadFailed) web.reload();
+                else activate();
             }
-            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
-                    || code == KeyEvent.KEYCODE_NUMPAD_ENTER) {
-                pressed = true;
-                click();
-                return true;
-            }
-            if (code == KeyEvent.KEYCODE_BACK) {
-                if (web.canGoBack()) { web.goBack(); return true; }
-                return true;
-            }
-        } else if (ev.getAction() == KeyEvent.ACTION_UP) {
-            if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
-                    || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                held.remove(code);
-                probe();
-                return true;
-            }
-            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
-                    || code == KeyEvent.KEYCODE_NUMPAD_ENTER) {
-                pressed = false;
-                probe();
-                return true;
-            }
+            return true;
         }
+
         return super.dispatchKeyEvent(ev);
     }
 
-    void startMove() {
-        if (moveScheduled) return;
-        moveScheduled = true;
-        h.postDelayed(new Mover(this), 0);
-    }
-
-    boolean moveScheduled = false;
-    int holdTicks = 0;
-
-    float heldStep() {
-        // arranque fino (precision) y aceleracion suave al mantener
-        int t = holdTicks;
-        if (t < 4) return 9f * dens;
-        if (t < 10) return 14f * dens;
-        if (t < 18) return 20f * dens;
-        return 27f * dens;
-    }
-
-    static class Mover implements Runnable {
-        final Main a;
-        Mover(Main m) { a = m; }
-
-        public void run() {
-            a.moveScheduled = false;
-            if (a.held.isEmpty()) return;
-
-            int dx = 0, dy = 0;
-            if (a.held.contains(KeyEvent.KEYCODE_DPAD_LEFT)) dx = -1;
-            if (a.held.contains(KeyEvent.KEYCODE_DPAD_RIGHT)) dx = 1;
-            if (a.held.contains(KeyEvent.KEYCODE_DPAD_UP)) dy = -1;
-            if (a.held.contains(KeyEvent.KEYCODE_DPAD_DOWN)) dy = 1;
-
-            a.holdTicks++;
-
-            // primera pulsacion: salto magnetico al siguiente objetivo real
-            if (a.holdTicks == 1) {
-                a.snapTo(dx, dy);
-                return;
-            }
-
-            // mantener pulsado: desplazamiento fino y progresivo
-            float step = a.heldStep();
-            float margin = 54f * a.dens;
-            if (dy > 0 && a.cy > a.vh - margin) {
-                a.web.evaluateJavascript("window.__ompScroll&&window.__ompScroll(200)", null);
-                a.h.postDelayed(this, 110);
-                return;
-            }
-            if (dy < 0 && a.cy < margin) {
-                a.web.evaluateJavascript("window.__ompScroll&&window.__ompScroll(-200)", null);
-                a.h.postDelayed(this, 110);
-                return;
-            }
-
-            a.cx += dx * step;
-            a.cy += dy * step;
-            a.clampCursor();
-            a.probe();
-            a.h.postDelayed(this, 45);
-        }
-    }
-
-    void clampCursor() {
-        if (cx < 0) cx = 0;
-        if (cy < 0) cy = 0;
-        if (cx > vw - 1) cx = vw - 1;
-        if (cy > vh - 1) cy = vh - 1;
-    }
-
-    int lastDx, lastDy;
-
-    void snapTo(int dx, int dy) {
-        lastDx = dx; lastDy = dy;
-        String args = Math.round(cx) + "," + Math.round(cy) + "," + dx + "," + dy;
-        web.evaluateJavascript(
-                "window.__ompNext?window.__ompNext(" + args + "):null",
-                new SnapDone(this));
-    }
-
-    static class SnapDone implements android.webkit.ValueCallback<String> {
-        final Main a;
-        SnapDone(Main m) { a = m; }
-        public void onReceiveValue(String v) {
-            if (v == null || v.equals("null")) {
-                // sin objetivo en esa direccion: desplazamiento en bloque
-                float step = 90f * a.dens;
-                a.cx += a.lastDx * step;
-                a.cy += a.lastDy * step;
-                a.clampCursor();
-                a.probe();
-                return;
-            }
-            String clean = v.replace("\"", "");
-            int comma = clean.indexOf(',');
-            if (comma < 0) { a.probe(); return; }
-            try {
-                a.cx = Float.parseFloat(clean.substring(0, comma));
-                a.cy = Float.parseFloat(clean.substring(comma + 1));
-                a.clampCursor();
-            } catch (Exception ignored) { }
-            a.probe();
-        }
+    @Override
+    public void onBackPressed() {
+        if (fullscreen) { exitFullscreen(true); return; }
+        if (urlBar.getVisibility() == View.VISIBLE) { hideUrlBar(); return; }
+        if (web.canGoBack()) { web.goBack(); return; }
+        super.onBackPressed(); // raíz: sale de la app, como cualquier app de TV
     }
 
     @Override

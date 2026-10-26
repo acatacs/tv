@@ -3,14 +3,15 @@
 Everything needed to reproduce, rebuild and verify the work done on a **Kalley R10G
 ("MOKA") Google TV** — a Realtek RTD6748 set-top running Android TV 14.
 
-The repository holds three things:
+The repository holds two things:
 
-1. **A native TV browser** (`com.omp.tvweb`) written from scratch, because neither
-   Firefox for Android nor Chrome is usable with a D-pad: the arrow keys only
-   scroll the page, they never move focus, so nothing is clickable.
-2. **A one-tap launcher** (`com.omp.tvbrowser`) that opens Firefox from the Google TV
-   home screen, which otherwise has no entry for it.
-3. **A written record** of the system tuning and the HDMI3 dropout diagnosis.
+1. **A native TV browser** (`com.omp.tvweb`) written from scratch, because mobile
+   browsers are unusable with a D-pad: the arrow keys only scroll the page, they
+   never move focus, so nothing is clickable.
+2. **A written record** of the system tuning and the HDMI3 dropout diagnosis.
+
+Ad blocking is handled entirely outside the browser by system-wide Private DNS
+(AdGuard), so it applies to every app, not just web pages.
 
 ---
 
@@ -137,13 +138,29 @@ and is still the default home.
 
 ## 4. Ad blocking
 
-Two independent layers, because either alone leaves gaps:
+Ad blocking is **system-wide**, via Private DNS, so it covers every app on the TV
+rather than only web pages:
 
 | Layer | Scope | What it catches |
 |---|---|---|
-| Private DNS (AdGuard) | whole device | ad/tracker domains by DNS name |
-| `shouldInterceptRequest` in `com.omp.tvweb` | in-app | ad domains by host, plus all popup windows |
-| uBlock Origin + Privacy Badger | inside Firefox | cosmetic filtering, first-party trackers |
+| Private DNS (AdGuard) | whole device | ad and tracker domains, by DNS name |
+| `shouldInterceptRequest` in `com.omp.tvweb` | in-app | ad hosts plus every popup window |
+
+Verified on the device — these resolve to `127.0.0.1`, i.e. they are blackholed:
+
+```
+doubleclick.net        -> 127.0.0.1
+googleadservices.com   -> 127.0.0.1
+adservice.google.com   -> 127.0.0.1
+```
+
+while ordinary sites are untouched:
+
+```
+lamovie.org            -> 188.114.97.5
+www.google.com         -> 142.251.150.119
+play.googleapis.com    -> 172.217.116.4
+```
 
 The in-app list lives in `Main.AD_HOSTS`. Adding a domain is a one-line change and a
 rebuild.
@@ -154,71 +171,88 @@ rebuild.
 
 ### 5.1 Why it exists
 
-Firefox and Chrome for Android are phone/tablet apps. On this TV they receive D-pad
-key events and use them to **scroll**, never to move DOM focus. The result is that
-no link can be activated: there is no visible focus, no pointer and no way to reach
-a "Play" button.
+Mobile browsers are phone/tablet apps. On this TV they receive D-pad key events and
+use them to **scroll**, never to move DOM focus. The result is that no link can be
+activated: there is no visible focus and no way to reach a "Play" button.
 
-`com.omp.tvweb` is a WebView host that adds exactly the missing layer: a real
-pointer, plus magnetic snapping onto the page's actual interactive elements.
+`com.omp.tvweb` is a WebView host that adds the missing layer: a focus ring that
+steps from one real control to the next, the way Android TV and tvOS move focus.
+There is **no pointer** — a remote never aims at pixels.
 
 ### 5.2 Interaction model
 
 | Control | Action |
 |---|---|
-| D-pad (tap) | snap the pointer to the next real target in that direction |
-| D-pad (hold) | fine, accelerating movement for pixel-precise placement |
-| OK | click at the pointer position |
-| BACK | back in history; in fullscreen, exit fullscreen |
-| RED / INFO / MENU | open the URL bar |
+| D-pad | move the focus ring to the next control in that direction |
+| OK (centre / Enter) | activate the focused control with a real touch |
+| BACK | history back; in fullscreen, leave fullscreen; at the root, exit the app |
+| RED | show the URL bar |
 
-The pointer is a `translationX/Y`-animated `ImageView` (composited, no relayout),
-eased towards the target every 16 ms. The highlight is a separate `View` drawn
-above the WebView, so it never fights the site's own CSS.
+D-pad auto-repeat is what produces continuous movement: holding the key walks the
+ring control by control, so no easing or acceleration code is needed.
 
-Snapping is resolved in JavaScript by `window.__ompNext`, which scores candidates
-by distance along the pressed direction, then applies bonuses for large area and
-for genuine interactivity (`a`, `button`, `input`, `video`, `[onclick]`,
-`role=button`). Scoring is what stops the pointer landing on a stray word in a
-paragraph instead of the "Watch now" button next to it.
+### 5.3 How focus is resolved (`assets/tvnav.js`)
 
-### 5.3 Clicking
+The ring is a single overlay `div` injected once per page. `window.__ompNav`
+exposes `move(dx, dy)`, `focusFirst()`, `tap()` and `fullscreen()`.
 
-`__ompClickAt` first tries a semantic `element.click()` on the nearest clickable
-ancestor, then falls back to dispatching real `mousedown` / `mouseup` / `click`
-events at the coordinates, and finally a synthetic `MotionEvent` through
-`WebView.dispatchTouchEvent`. Video players usually need one of the last two.
+- **Targets** come from `a[href], button, input, select, textarea, video, iframe,
+  [role=button], [role=link], [onclick], [tabindex]`.
+- **`visibleBox()`** rejects anything under 24 px, `display:none`, `visibility:hidden`,
+  opacity below 0.05, and clips the box against every `overflow:hidden`/`clip`
+  ancestor, so a control buried inside a collapsed panel never receives focus.
+- A control that **contains** another control is dropped, so the innermost control
+  takes focus instead of the card wrapping it.
+- **`nearest()`** scores candidates by distance along the pressed direction plus
+  twice the off-axis distance, which is what makes a row win over a diagonal
+  neighbour.
+- Off-screen controls stay in the list: pressing DOWN past the fold scrolls to the
+  next row rather than stopping.
+- **`reveal()`** scrolls the least amount needed, keeping 140 px of margin, and uses
+  `scrollIntoView` inside scroll containers so their own scrolling is respected.
+- After scrolling settles (140 ms) `settle()` re-checks the focus; if it ended up off
+  screen, focus moves to the nearest control still visible.
+- The ring **follows live**: scroll and resize listeners reposition it with
+  `requestAnimationFrame`, so it stays glued to its control while the page moves.
+- `place()` copies the control's `border-radius` so the outline hugs rounded cards.
 
-### 5.4 Fullscreen video
+### 5.4 Activation
 
-`WebChromeClient.onShowCustomView` moves the player's view into a full-screen
-`FrameLayout` overlay and hides the system UI. For players that never request
-fullscreen, `__ompBigVideo` calls `requestFullscreen()` on the largest `<video>`
-(or its parent) as a fallback.
+`tap()` returns the centre of the focused control in CSS pixels plus a flag for
+media. Java then sends a real `MotionEvent` — a **trusted** gesture — so links
+follow, buttons act, and fullscreen requests are permitted. A synthetic JS click
+would not carry that trust.
 
-### 5.5 Source layout
+### 5.5 Fullscreen video
+
+`WebChromeClient.onShowCustomView` moves the player into a full-screen overlay.
+If the player never asks for fullscreen, `__ompNav.fullscreen()` calls
+`requestFullscreen()` on the focused `<video>`/`<iframe>` 450 ms after the tap,
+while the gesture is still valid. `onCustomViewHidden()` is called when BACK leaves
+fullscreen, otherwise the WebView refuses the next request for the rest of the
+session.
+
+### 5.6 Source layout
 
 ```
 src/
   AndroidManifest.xml                  leanback + VIEW intents, SDK 21..34
   ks.jks                               throwaway signing key (pass omp1234, alias k)
-  assets/tvnav.js                      injected navigation script
-  res/drawable-xhdpi/{icon,banner}.png generated by Pillow
+  assets/tvnav.js                      focus-ring navigation, injected per page
+  res/drawable-xhdpi/{icon,banner}.png generated with Pillow
   src/com/omp/tvweb/
-    Main.java                          activity, key handling, WebView setup
-    NativeBridge.java                  @JavascriptInterface: hover(), ready()
-    ArrowCursor.java                   pointer Drawable (Path + halo)
-    HighlightView.java                 focus outline Drawable
+    Main.java                          activity, key handling, WebView, fullscreen
     UrlBar.java                        TV-style URL entry
 ```
 
-912 lines of Java plus a 169-line JavaScript asset; no third-party dependencies,
-no AndroidX, no Gradle. The navigation script lives in `assets/` rather than a
-Java string literal so it can be read, diffed and linted on its own. `build.sh`
-adds `assets/` to the APK explicitly, because `aapt2 link` does not copy a plain
-asset tree the way Gradle does.
+About 610 lines of Java, a 313-line JavaScript asset, a 49-line manifest and a
+65-line build script: roughly 1,030 lines of source in total, no third-party
+dependencies, no AndroidX, no Gradle. The navigation script lives in `assets/`
+rather than a Java string literal so it can be read, diffed and linted on its own;
+`build.sh` adds `assets/` to the APK explicitly because `aapt2 link` does not copy a
+plain asset tree the way Gradle does.
 
-### 5.6 Building
+### 5.7 Building
 
 Requirements: JDK 17+ and Android SDK build-tools **35.0.0**.
 
@@ -251,10 +285,9 @@ Override the SDK or the TV address with `ANDROID_SDK=` and `TV_ADDR=`.
 class carrying an `EnclosingMethod` attribute that implements an interface from
 `android.jar` — anonymous `Runnable`s and `ValueCallback<String>` are enough to
 trigger it. Use **build-tools 35.0.0**, and prefer named static inner classes over
-anonymous ones. This is why `Main` has classes like `HoverApply`, `Mover` and
-`ProbeDone` instead of lambdas.
+anonymous ones.
 
-### 5.7 Reviewing changes on the TV
+### 5.8 Reviewing changes on the TV
 
 ```bash
 TV="adb -s 192.168.1.74:5555"
@@ -271,34 +304,27 @@ $TV shell input keyevent KEYCODE_DPAD_CENTER
 # see the result
 $TV exec-out screencap -p > /tmp/shot.png
 
-# watch the bridge while you move
+# watch the JavaScript bridge while you move
 $TV shell logcat -c
 $TV shell logcat -d -s TVWEB
 ```
 
-`TVWEB` logs every `hover` and every probe result, which is the fastest way to tell
-"the pointer never reached a target" from "the highlight is not drawing". A healthy
-trace looks like `bridge ready=true`, then `hover 473,517 81x42 vis=1` as the
-pointer moves; `hover 0,0 0x0 vis=0` means nothing interactive is under the cursor.
+Screenshots are 1920×1080 while the app window reports 3840×2160 logical pixels, so
+divide coordinates by 2 when translating a tap point from a screenshot into a
+`MotionEvent` position.
 
-Screenshots are taken at 1920×1080 but the app window reports 3840×2160 logical
-pixels, so divide coordinates by 2 when translating a tap point from a screenshot
-into a `dispatchTouchEvent` position.
+To check that a rebuild produced what is actually installed:
 
----
-
-## 6. The launcher shim (`com.omp.tvbrowser`)
-
-Firefox declares only `android.intent.category.LAUNCHER`, so it never appears in the
-Google TV home screen, which queries `LEANBACK_LAUNCHER`. The shim is a 12 KB
-`Theme.NoDisplay` activity that declares the leanback category and starts
-`org.mozilla.fennec_fdroid/.App`. Source is `apk/shim.apk`; rebuild it by pointing
-`aapt2` at the same manifest pattern with
-`android:name=".Launch"` and a `LEANBACK_LAUNCHER` intent filter.
+```bash
+APK=$($TV shell pm path com.omp.tvweb | sed 's/package://' | tr -d '\r')
+$TV pull "$APK" /tmp/installed.apk
+unzip -p /tmp/installed.apk assets/tvnav.js | md5sum
+md5sum src/assets/tvnav.js
+```
 
 ---
 
-## 7. HDMI3 dropouts — diagnosis (closed)
+## 6. HDMI3 dropouts — diagnosis (closed)
 
 **Symptom:** the picture on `hdmi_port=3` goes black for roughly 1–3 s, then returns.
 
@@ -332,32 +358,54 @@ Full report: `evidence/INFORME_FINAL_HDMI3.md`.
 
 ---
 
-## 8. Extensions
+## 7. Ad blocking
 
-| Extension | State | Evidence |
+Two layers, both independent of any browser extension:
+
+| Layer | Scope | What it catches |
 |---|---|---|
-| Privacy Badger 2026.9.15 | **installed and active** | Firefox menu shows "Privacy Badger 1" with a block counter |
-| uBlock Origin 1.75.0 | **pending** | AMO serves it for Android ≥115; Firefox 158 qualifies |
+| Private DNS (AdGuard) | whole device | ad and tracker domains, by DNS name |
+| `shouldInterceptRequest` in `com.omp.tvweb` | in-app | ad hosts plus every popup window |
 
-To finish installing uBlock Origin on the TV: menu ⋮ → Extensions → Manage
-extensions → the `+` next to uBlock Origin → Add.
+DNS blocking covers every app, not only web pages: YouTube, Play, Netflix and the
+launcher all resolve through the same resolver.
 
----
+Verified on the device — these resolve to `127.0.0.1`, i.e. they are blackholed:
 
-## 9. Known limitations
+```
+doubleclick.net        -> 127.0.0.1
+googleadservices.com   -> 127.0.0.1
+adservice.google.com   -> 127.0.0.1
+```
+
+while ordinary sites are untouched:
+
+```
+lamovie.org            -> 188.114.97.5
+www.google.com         -> 142.251.150.119
+play.googleapis.com    -> 172.217.116.4
+```
+
+The in-app list lives in `Main.AD_HOSTS`. Adding a domain is a one-line change and a
+rebuild.
+
+## 8. Known limitations
 
 - ADB is unprivileged: no `dmesg`, no `/data/data`, no `/sys/class/thermal`.
-- The TV's `loadavg` sits at ~19–22 because 17 vendor kernel threads park in
-  `D` state for the video pipeline — CPU is actually 72% idle. Do not read
-  `loadavg` as saturation on this device.
-- Firefox and Chrome are not TV browsers; they remain installed for the extension
-  support the WebView cannot provide.
+- The TV's `loadavg` sits at ~19–22 because ~17 vendor kernel threads park in
+  `D` state for the video pipeline. Measured over a quiet 10 s window the CPU is
+  **98% idle** (`/proc/stat`: user 0.33%, system 0.96%, softirq 0.58%), so do not
+  read `loadavg` as saturation on this device.
+- After the cleanup the device reports exactly one user-installed package,
+  `com.omp.tvweb`. No third-party browser and no Firefox remain.
+- `com.omp.tvweb` is the only browser on the device; no third-party browser is
+  installed.
 - The WebView host inherits the platform WebView (`com.google.android.webview`
   155.x), so the browser is only as modern as that component.
 
 ---
 
-## 10. Repository layout
+## 9. Repository layout
 
 ```
 README.md                 this file
@@ -365,17 +413,8 @@ README.md                 this file
 scripts/build.sh          build + optional install
 src/                      browser sources, manifest, resources, keystore
 apk/tvweb.apk             signed browser APK
-apk/shim.apk              signed launcher shim
 evidence/                 diagnosis reports and measurement baselines
 ```
 
-Large upstream APKs (`fennec-158.0.2-armeabi-v7a.apk`, `BraveMonoarm.apk`) are
-gitignored. Re-download them with:
-
-```bash
-curl -LO https://f-droid.org/repo/org.mozilla.fennec_fdroid_1580200.apk
-curl -LO https://github.com/brave/brave-browser/releases/download/v1.100.23/BraveMonoarm.apk
-```
-
-Only `armeabi-v7a` builds of either will install; arm64 and x86 variants fail with
-`INSTALL_FAILED_NO_MATCHING_ABIS`.
+`com.omp.tvweb` targets `armeabi-v7a`, the only ABI this panel has; an arm64 or x86
+build fails with `INSTALL_FAILED_NO_MATCHING_ABIS`.
