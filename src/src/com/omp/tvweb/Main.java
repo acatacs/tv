@@ -14,6 +14,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -44,7 +45,6 @@ public class Main extends Activity implements UrlBar.Submit {
     static final String HOME = "https://lamovie.org";
 
     // Pill texts. Escapes keep the source ASCII whatever the build locale is.
-    static final String LOADING = "Cargando…";
     static final String FAILED = "No se pudo cargar · OK para reintentar";
     static final String HINT = "Botón rojo: escribir una dirección";
 
@@ -76,7 +76,7 @@ public class Main extends Activity implements UrlBar.Submit {
         "liveinternet.ru", "onclickads.net", "adcash.com", "bidvertiser.com",
         "adf.ly", "shorte.st", "linkvertise.com", "adfoc.us", "ouo.io",
         "cloudflareinsights.com", "popmonetizer.com", "clksite.com",
-        "tsyndicate.com", "trafficstars.com", "adsco.re"
+        "tsyndicate.com", "trafficstars.com", "adsco.re", "effectivegatecpm.com"
     };
 
     FrameLayout root;
@@ -84,6 +84,7 @@ public class Main extends Activity implements UrlBar.Submit {
     UrlBar urlBar;
     FrameLayout videoHolder;
     TextView status;
+    View progress;
 
     final Handler h = new Handler();
     final Set<String> adSet = new HashSet<String>();
@@ -92,6 +93,7 @@ public class Main extends Activity implements UrlBar.Submit {
     boolean loadFailed;
     boolean hintShown;
     boolean hintVisible;
+    boolean playerMode;   // a player is focused: the remote drives it, not the page
     WebChromeClient.CustomViewCallback customCb;
     String navSource;
 
@@ -115,6 +117,31 @@ public class Main extends Activity implements UrlBar.Submit {
             return null;
         }
 
+        // Page-initiated navigation of the main frame (ad redirects, popunders)
+        // to another site is dropped; anything the person asked for passes.
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+            String url = req.getUrl().toString();
+            if (req.isForMainFrame() && !req.hasGesture() && !sameSite(v.getUrl(), url)) {
+                Log.d(TAG, "blocked redirect " + url);
+                return true;
+            }
+            return shouldOverrideUrlLoading(v, url);
+        }
+
+        static boolean sameSite(String current, String next) {
+            if (current == null) return true;
+            return registrable(Uri.parse(current).getHost()).equals(registrable(Uri.parse(next).getHost()));
+        }
+
+        // last two labels: "www.flixlatam.com" and "flixlatam.com" are one site
+        static String registrable(String host) {
+            if (host == null) return "";
+            String[] p = host.split("\\.");
+            if (p.length <= 2) return host;
+            return p[p.length - 2] + "." + p[p.length - 1];
+        }
+
         @Override
         public boolean shouldOverrideUrlLoading(WebView v, String url) {
             if (url == null) return false;
@@ -130,12 +157,15 @@ public class Main extends Activity implements UrlBar.Submit {
         @Override
         public void onPageStarted(WebView v, String url, Bitmap icon) {
             a.loadFailed = false;
-            a.showStatus(LOADING);
+            a.startProgress();
         }
 
         @Override
         public void onPageFinished(WebView v, String url) {
-            if (a.urlBar != null) a.urlBar.setUrl(url);
+            if (a.urlBar != null) {
+                a.urlBar.setUrl(url);
+                a.urlBar.showHome(url == null || !url.startsWith(HOME));
+            }
             // onReceivedError runs before this; keep its message on screen.
             if (a.loadFailed) return;
             a.hideStatus();
@@ -163,6 +193,11 @@ public class Main extends Activity implements UrlBar.Submit {
         }
 
         @Override
+        public void onProgressChanged(WebView v, int progress) {
+            a.moveProgress(progress);
+        }
+
+        @Override
         public void onShowCustomView(View view, CustomViewCallback cb) {
             a.enterFullscreen(view, cb);
         }
@@ -178,6 +213,10 @@ public class Main extends Activity implements UrlBar.Submit {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // only debuggable builds expose the page to DevTools
+        if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
         for (String host : AD_HOSTS) adSet.add(host);
 
         dens = getResources().getDisplayMetrics().density;
@@ -218,7 +257,14 @@ public class Main extends Activity implements UrlBar.Submit {
         videoHolder.setVisibility(View.GONE);
         root.addView(videoHolder, new FrameLayout.LayoutParams(-1, -1));
 
-        // estado: carga, error y pista. Abajo a la izquierda, dentro del area segura
+        // progreso de carga: una línea fina arriba, sin texto
+        progress = new View(this);
+        progress.setBackgroundColor(0xFF22D3EE);
+        progress.setPivotX(0);
+        progress.setVisibility(View.GONE);
+        root.addView(progress, new FrameLayout.LayoutParams(-1, (int) (3 * dens), Gravity.TOP));
+
+        // estado: error y pista. Abajo a la izquierda, dentro del area segura
         status = buildStatus();
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
                 -2, -2, Gravity.BOTTOM | Gravity.START);
@@ -229,6 +275,7 @@ public class Main extends Activity implements UrlBar.Submit {
         // barra de URL
         urlBar = new UrlBar(this);
         urlBar.setSubmit(this);
+        urlBar.setHome(HOME);
         urlBar.setVisibility(View.GONE);
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(
                 Math.min((int) (860 * dens), vw - (int) (96 * dens)), -2,
@@ -254,6 +301,25 @@ public class Main extends Activity implements UrlBar.Submit {
         t.setPadding(ph, pv, ph, pv);
         t.setVisibility(View.GONE);
         return t;
+    }
+
+    void startProgress() {
+        progress.setVisibility(View.VISIBLE);
+        progress.setAlpha(1f);
+        progress.setScaleX(0f);
+    }
+
+    void moveProgress(int p) {
+        progress.setScaleX(p / 100f);
+        if (p >= 100) {
+            progress.animate().alpha(0f).setDuration(300).withEndAction(new HideProgress(this));
+        }
+    }
+
+    static class HideProgress implements Runnable {
+        final Main a;
+        HideProgress(Main m) { a = m; }
+        public void run() { a.progress.setVisibility(View.GONE); }
     }
 
     void showStatus(String text) {
@@ -342,7 +408,7 @@ public class Main extends Activity implements UrlBar.Submit {
     void showUrlBar() {
         hideStatus();
         urlBar.setVisibility(View.VISIBLE);
-        urlBar.focusField();
+        urlBar.focusDefault();
     }
 
     void hideUrlBar() {
@@ -381,7 +447,42 @@ public class Main extends Activity implements UrlBar.Submit {
     }
 
     void activate() {
+        if (playerMode) return;
         web.evaluateJavascript("window.__ompNav&&window.__ompNav.tap()", new TapDone(this));
+    }
+
+    // OK with nothing to stop on but a player on screen: take the remote into it.
+    static class PlayerDone implements ValueCallback<String> {
+        final Main a;
+        PlayerDone(Main m) { a = m; }
+        public void onReceiveValue(String v) {
+            if (v == null || "null".equals(v)) return;
+            String clean = v.replace("\"", "");
+            if (clean.startsWith("TAP:")) {
+                // a poster with a play button: touch it, then look for the player
+                String[] p = clean.substring(4).split(",");
+                try {
+                    float s = a.web.getScale();
+                    a.tapView(a.web, Integer.parseInt(p[0]) * s, Integer.parseInt(p[1]) * s);
+                    Log.d(TAG, "poster tap " + p[0] + "," + p[1]);
+                } catch (RuntimeException e) {
+                    Log.e(TAG, "bad poster tap " + clean);
+                    return;
+                }
+                a.h.postDelayed(new PlayerLater(a), 1200);
+                return;
+            }
+            a.playerMode = true;
+            Log.d(TAG, "player " + clean);
+        }
+    }
+
+    static class PlayerLater implements Runnable {
+        final Main a;
+        PlayerLater(Main m) { a = m; }
+        public void run() {
+            a.web.evaluateJavascript("window.__ompNav&&window.__ompNav.playerFrame()", new PlayerDone(a));
+        }
     }
 
     // Sends a real touch so the page sees a trusted gesture: links follow,
@@ -400,7 +501,11 @@ public class Main extends Activity implements UrlBar.Submit {
         final Main a;
         TapDone(Main m) { a = m; }
         public void onReceiveValue(String v) {
-            if (v == null || "null".equals(v)) return;
+            if (v == null || "null".equals(v)) {
+                // nothing to stop on: a player on screen takes the remote instead
+                a.web.evaluateJavascript("window.__ompNav&&window.__ompNav.enterPlayer()", new PlayerDone(a));
+                return;
+            }
             String[] p = v.replace("\"", "").split(",");
             if (p.length < 3) return;
             try {
@@ -410,6 +515,7 @@ public class Main extends Activity implements UrlBar.Submit {
                 Log.d(TAG, "tap css=" + p[0] + "," + p[1] + " scale=" + s + " media=" + p[2]);
                 a.tapView(a.web, x, y);
                 if ("1".equals(p[2])) {
+                    a.playerMode = true;
                     a.h.postDelayed(new FullscreenFallback(a), FULLSCREEN_FALLBACK_MS);
                 }
             } catch (NumberFormatException e) {
@@ -433,6 +539,37 @@ public class Main extends Activity implements UrlBar.Submit {
                 || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT;
     }
 
+    // Players show their control bar on pointer activity. A hover move (mouse
+    // source, so it does not count as a tap) over the player wakes it without
+    // pausing anything.
+    void showPlayerControls() {
+        long t = SystemClock.uptimeMillis();
+        float x = videoHolder.getWidth() > 0 ? videoHolder.getWidth() / 2f : web.getWidth() / 2f;
+        float y = videoHolder.getHeight() > 0 ? videoHolder.getHeight() / 2f : web.getHeight() / 2f;
+        MotionEvent.PointerProperties[] props = { new MotionEvent.PointerProperties() };
+        props[0].id = 0;
+        props[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords[] coords = { new MotionEvent.PointerCoords() };
+        coords[0].x = x;
+        coords[0].y = y;
+        MotionEvent hover = MotionEvent.obtain(t, t, MotionEvent.ACTION_HOVER_MOVE, 1, props, coords,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+        web.dispatchGenericMotionEvent(hover);
+        hover.recycle();
+    }
+
+    // A key press delivered to the page: it reaches whichever frame has focus.
+    void sendKey(int code, int meta) {
+        long t = SystemClock.uptimeMillis();
+        web.dispatchKeyEvent(new KeyEvent(t, t, KeyEvent.ACTION_DOWN, code, 0, meta));
+        web.dispatchKeyEvent(new KeyEvent(t, t + 1, KeyEvent.ACTION_UP, code, 0, meta));
+    }
+
+    static boolean isBarKey(int code) {
+        return code == KeyEvent.KEYCODE_PROG_RED || code == KeyEvent.KEYCODE_SEARCH
+                || code == KeyEvent.KEYCODE_MENU;
+    }
+
     static boolean isOk(int code) {
         return code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
                 || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
@@ -443,6 +580,12 @@ public class Main extends Activity implements UrlBar.Submit {
         int code = ev.getKeyCode();
         boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
 
+        // address bar: red key, or the Search / Menu keys most remotes have
+        if (down && ev.getRepeatCount() == 0 && isBarKey(code) && urlBar.getVisibility() != View.VISIBLE) {
+            showUrlBar();
+            return true;
+        }
+
         // la barra de URL usa el foco nativo de Android (campo, botón Ir)
         if (urlBar.getVisibility() == View.VISIBLE) {
             return super.dispatchKeyEvent(ev);
@@ -452,6 +595,17 @@ public class Main extends Activity implements UrlBar.Submit {
         if (fullscreen) {
             if (down && isOk(code) && ev.getRepeatCount() == 0) {
                 tapView(videoHolder, videoHolder.getWidth() / 2f, videoHolder.getHeight() / 2f);
+                return true;
+            }
+            return super.dispatchKeyEvent(ev);
+        }
+
+        // reproductor: izquierda/derecha saltan en el video, OK pausa o reanuda
+        // (Enter). Al mover, la barra de controles del reproductor aparece.
+        if (playerMode) {
+            if (isDpad(code) && down) showPlayerControls();
+            if (isOk(code)) {
+                if (down && ev.getRepeatCount() == 0) sendKey(KeyEvent.KEYCODE_ENTER, 0);
                 return true;
             }
             return super.dispatchKeyEvent(ev);
@@ -484,6 +638,7 @@ public class Main extends Activity implements UrlBar.Submit {
     @Override
     public void onBackPressed() {
         if (fullscreen) { exitFullscreen(true); return; }
+        if (playerMode) { playerMode = false; return; }
         if (urlBar.getVisibility() == View.VISIBLE) { hideUrlBar(); return; }
         if (web.canGoBack()) { web.goBack(); return; }
         super.onBackPressed(); // raíz: sale de la app, como cualquier app de TV

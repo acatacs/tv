@@ -101,6 +101,10 @@
     if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) < 0.05) {
       return null;
     }
+    // A frame that covers the screen is an overlay or an ad, not a player.
+    if (el.tagName === 'IFRAME' && r.width > window.innerWidth * 0.9 && r.height > window.innerHeight * 0.9) {
+      return null;
+    }
     var b = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
     // A fixed element is not cut by the overflow of its ancestors (a popup
     // inside a collapsed wrapper), and a fixed ancestor cuts off what is above it.
@@ -135,7 +139,10 @@
       pointer.set(el, window.getComputedStyle(el).cursor === 'pointer');
       parent = el.parentElement;
       // a control is never a card: a small pointer button is still a button
+      // a card holds one title link at most; a wrapper with several links is a
+      // list (search results, a row), and each link is a stop of its own
       card = pointer.get(el) && !(parent && pointer.get(parent)) && !el.matches(SELECTOR) &&
+             el.querySelectorAll('a[href]').length < 2 &&
              (el.textContent.trim().length > 0 || !!el.querySelector('img,svg,picture'));
       if (card || el.matches(SELECTOR)) {
         el.__ompC = card ? 1 : 0;
@@ -174,7 +181,8 @@
     while (host && k < 4) {
       hr = host.getBoundingClientRect();
       if (hr.width >= CARD_MIN && hr.height >= CARD_MIN &&
-          hr.width <= window.innerWidth * 0.9 && hr.height <= window.innerHeight * 0.95) {
+          hr.width <= window.innerWidth && hr.height <= window.innerHeight &&
+          host.querySelectorAll('a[href]').length === 1) {   // one link: a tile, not a list
         host.__ompH = link;
         host.__ompC = 1;
         if (!seen.has(host)) { seen.add(host); out.push({ el: host, card: true }); }
@@ -421,14 +429,61 @@
            Math.round(focusedBox.bottom - focusedBox.top);
   }
 
+  // The biggest player frame or video on screen, focused so the remote drives
+  // it. Returns its tag, or null.
+  function playerFrame() {
+    var els = document.querySelectorAll('iframe,video'), best = null, ba = 0, i, e, r, a;
+    for (i = 0; i < els.length; i++) {
+      e = els[i];
+      r = e.getBoundingClientRect();
+      a = r.width * r.height;
+      if (r.width >= 200 && r.height >= 120 && onScreen(r) && a > ba) { ba = a; best = e; }
+    }
+    if (!best) { return null; }
+    focused = best;
+    focusedBox = visibleBox(best, false) || best.getBoundingClientRect();
+    try { best.focus({ preventScroll: true }); } catch (err) {}
+    place(focusedBox);
+    return best.tagName;
+  }
+
+  // Nothing is playing yet: the biggest pointer tile on screen is the poster
+  // with the play button. Its centre, as "TAP:x,y" for Java to touch.
+  function posterTap() {
+    var list = elements(), best = null, ba = 0, i, e, b, a;
+    for (i = 0; i < list.length; i++) {
+      e = list[i];
+      if (window.getComputedStyle(e.el).cursor !== 'pointer') { continue; }
+      b = visibleBox(e.el, e.card);
+      if (!b || !onScreen(b)) { continue; }
+      a = (b.right - b.left) * (b.bottom - b.top);
+      if (b.right - b.left >= 200 && b.bottom - b.top >= 120 && a > ba) { ba = a; best = b; }
+    }
+    if (!best) { return null; }
+    return 'TAP:' + Math.round((best.left + best.right) / 2) + ',' + Math.round((best.top + best.bottom) / 2);
+  }
+
+  function enterPlayer() {
+    return playerFrame() || posterTap();
+  }
+
   window.__ompNav = {
+    enterPlayer: enterPlayer,
+    playerFrame: playerFrame,
     version: 4,
     move: function (dx, dy) { var r = move(dx, dy); return (r ? 'moved ' : 'edge ') + state(); },
     focusFirst: function () { mount(); return focusFirst(); },
     tap: tap,
     fullscreen: fullscreen,
     state: state,
-    targets: function () { return targets().length; }
+    targets: function () { return targets().length; },
+    // diagnostics: what the navigator would stop on, in order
+    list: function () {
+      return targets().map(function (t) {
+        return t.el.tagName + '.' + String(t.el.className).slice(0, 18) + (t.card ? '(card)' : '') + ':' + (t.el.textContent || '').trim().slice(0, 16) +
+               '@' + Math.round(t.b.left) + ',' + Math.round(t.b.top);
+      });
+    }
   };
 
   mount();
