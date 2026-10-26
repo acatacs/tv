@@ -13,7 +13,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <application
-        android:label="Navegador TV"
+        android:label="Cine TV"
         android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:allowBackup="false"
@@ -24,7 +24,7 @@
         <activity
             android:name=".Main"
             android:exported="true"
-            android:label="Navegador TV"
+            android:label="Cine TV"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:launchMode="singleTask"
             android:screenOrientation="landscape">

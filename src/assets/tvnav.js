@@ -16,6 +16,7 @@
   var SETTLE_MS = 140;    // after scrolling stops, re-check the focus once
   var SELECTOR = 'a[href],button,input:not([type=hidden]),select,textarea,video,iframe,' +
                  '[role=button],[role=link],[onclick],[tabindex]:not([tabindex="-1"])';
+  var CARD_MIN = 60;      // a pointer container smaller than this is a glyph, not a card
   var MIN_SIZE = 24;      // smaller visible boxes are decoration, not targets
   var TEXT_ENTRY = /^(INPUT|TEXTAREA|SELECT)$/;
   var focused = null;
@@ -23,6 +24,25 @@
   var ring = null;
   var frame = 0;
   var settleTimer = 0;
+  var cache = null;       // [{el, card}] in document order
+  var dirty = true;
+  var built = 0;
+  var REBUILD_MS = 400;  // busy pages mutate every frame; rebuild at most this often
+
+  // Rebuild the candidate list only when nodes are added or removed.
+  var refocusTimer = 0;
+  var observer = new MutationObserver(function () {
+    dirty = true;
+    // the focused control was removed (a popup closed): hide the ring and
+    // land on the first visible control again instead of leaving it on air
+    if (focused && !live(focused)) {
+      focused = null;
+      focusedBox = null;
+      hide();
+      clearTimeout(refocusTimer);
+      refocusTimer = setTimeout(focusFirst, 120);
+    }
+  });
 
   function mount() {
     if (document.getElementById(STYLE_ID)) { return; }
@@ -31,7 +51,7 @@
     s.textContent =
       '#' + RING_ID + '{position:fixed;left:0;top:0;width:0;height:0;margin:0;' +
       'box-sizing:border-box;border:3px solid #22D3EE;pointer-events:none;opacity:0;' +
-      'z-index:2147483646;will-change:left,top,width,height;' +
+      'z-index:2147483646;' +
       'transition:left .18s cubic-bezier(.2,.8,.2,1),top .18s cubic-bezier(.2,.8,.2,1),' +
       'width .18s cubic-bezier(.2,.8,.2,1),height .18s cubic-bezier(.2,.8,.2,1),' +
       'border-radius .18s ease,opacity .12s ease}' +
@@ -45,6 +65,7 @@
 
     window.addEventListener('scroll', onScroll, { capture: true, passive: true });
     window.addEventListener('resize', onScroll, { passive: true });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   function onScroll() {
@@ -72,14 +93,19 @@
   function visibleBox(el) {
     if (el.disabled || el.getAttribute('aria-hidden') === 'true') { return null; }
     var r = el.getBoundingClientRect();
-    if (r.width < MIN_SIZE || r.height < MIN_SIZE) { return null; }
+    if (el.__ompC) {
+      if (r.width < CARD_MIN || r.height < CARD_MIN ||
+          r.width > window.innerWidth || r.height > window.innerHeight) { return null; }
+    } else if (r.width < MIN_SIZE || r.height < MIN_SIZE) { return null; }
     var st = window.getComputedStyle(el);
     if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) < 0.05) {
       return null;
     }
     var b = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-    var n = el.parentElement;
-    while (n && n !== document.documentElement) {
+    // A fixed element is not cut by the overflow of its ancestors (a popup
+    // inside a collapsed wrapper), and a fixed ancestor cuts off what is above it.
+    var n = st.position === 'fixed' ? null : el.parentElement;
+    while (n && n !== document.body && n !== document.documentElement) {
       var ps = window.getComputedStyle(n);
       if (ps.overflowX === 'hidden' || ps.overflowX === 'clip' ||
           ps.overflowY === 'hidden' || ps.overflowY === 'clip') {
@@ -88,53 +114,123 @@
         b.top = Math.max(b.top, c.top);
         b.right = Math.min(b.right, c.right);
         b.bottom = Math.min(b.bottom, c.bottom);
-        if (b.right - b.left < MIN_SIZE || b.bottom - b.top < MIN_SIZE) { return null; }
+        if (b.right - b.left < 16 || b.bottom - b.top < 16) { return null; }
       }
+      if (ps.position === 'fixed') { break; }
       n = n.parentElement;
     }
     return b;
   }
 
-  // Every visible control, off-screen ones included so that moving down past
-  // the fold reaches the next row. A control that contains another control is
-  // dropped: the innermost one takes focus.
-  function targets() {
-    var all = document.querySelectorAll(SELECTOR), out = [], i, el, b;
+  // Candidates: a control is anything in SELECTOR. A card is the outermost
+  // cursor:pointer element (the whole tile of a poster grid). A card must have
+  // content: empty pointer boxes are loading placeholders, not targets.
+  function elements() {
+    if (cache && (!dirty || Date.now() - built < REBUILD_MS)) { return cache; }
+    built = Date.now();
+    var pointer = new WeakMap(), out = [], seen = new WeakSet(), all, i, el, parent, card;
+    all = document.body ? document.body.getElementsByTagName('*') : [];
     for (i = 0; i < all.length; i++) {
       el = all[i];
-      b = visibleBox(el);
+      pointer.set(el, window.getComputedStyle(el).cursor === 'pointer');
+      parent = el.parentElement;
+      // a control is never a card: a small pointer button is still a button
+      card = pointer.get(el) && !(parent && pointer.get(parent)) && !el.matches(SELECTOR) &&
+             (el.textContent.trim().length > 0 || !!el.querySelector('img,svg,picture'));
+      if (card || el.matches(SELECTOR)) {
+        el.__ompC = card ? 1 : 0;
+        out.push({ el: el, card: !!card });
+        if (!card) { promote(el, out, seen); }
+      }
+    }
+    cache = out;
+    dirty = false;
+    return cache;
+  }
+
+  // An open dialog owns the remote until it closes: only its controls count.
+  // If it has none, fall back to the whole page rather than strand the focus.
+  function modalRoot() {
+    var m = document.querySelectorAll('[role=dialog],[aria-modal=true],dialog[open]'), i, root = null;
+    for (i = 0; i < m.length; i++) {
+      if (visibleBox(m[i])) { root = m[i]; }
+    }
+    return root;
+  }
+
+  // A target under another element (a popup, a banner) is not reachable.
+  function covered(el, b) {
+    var x = (b.left + b.right) / 2, y = (b.top + b.bottom) / 2;
+    if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) { return false; }
+    var hit = document.elementFromPoint(x, y);
+    return !!hit && hit !== el && !el.contains(hit) && !hit.contains(el);
+  }
+
+  // A link too small to aim at (a title under a poster) belongs to the tile
+  // around it. The ring goes around the tile; OK still activates the link.
+  function promote(link, out, seen) {
+    var r = link.getBoundingClientRect(), host = link.parentElement, k = 0, hr;
+    if (r.width >= MIN_SIZE && r.height >= MIN_SIZE) { return; }
+    while (host && k < 4) {
+      hr = host.getBoundingClientRect();
+      if (hr.width >= CARD_MIN && hr.height >= CARD_MIN &&
+          hr.width <= window.innerWidth * 0.9 && hr.height <= window.innerHeight * 0.95) {
+        host.__ompH = link;
+        host.__ompC = 1;
+        if (!seen.has(host)) { seen.add(host); out.push({ el: host, card: true }); }
+        return;
+      }
+      host = host.parentElement;
+      k++;
+    }
+  }
+
+  // Visible targets, off-screen ones included so that moving down past the
+  // fold reaches the next row. Inside a card or a link is part of that target.
+  // A control that wraps other controls is dropped: the innermost one wins.
+  function targets() {
+    var list = elements(), out = [], keep = [], i, e, b, t, p, depth, r;
+    var top = -window.innerHeight * 2, bottom = window.innerHeight * 3;
+    for (i = 0; i < list.length; i++) {
+      e = list[i];
+      r = e.el.getBoundingClientRect();
+      if (r.bottom < top || r.top > bottom) { continue; }   // far outside the working band
+      b = visibleBox(e.el);
       if (b) {
-        el.__ompT = 1;
-        out.push({ el: el, b: b, cx: (b.left + b.right) / 2, cy: (b.top + b.bottom) / 2 });
+        e.el.__ompT = e.card ? 2 : 1;
+        e.el.__ompW = 0;
+        out.push({ el: e.el, card: e.card, b: b,
+                   cx: (b.left + b.right) / 2, cy: (b.top + b.bottom) / 2 });
       }
     }
     for (i = 0; i < out.length; i++) {
-      var p = out[i].el.parentElement, depth = 0;
+      p = out[i].el.parentElement; depth = 0;
       while (p && depth < 12) {
-        if (p.__ompT) { p.__ompW = 1; }
-        p = p.parentElement;
-        depth++;
+        if (p.__ompT === 1 && p.tagName !== 'A') { p.__ompW = 1; }
+        p = p.parentElement; depth++;
       }
     }
-    // A link is the target of its whole card, so the small buttons inside it
-    // (a menu dot, a play badge) are not separate stops.
-    var keep = [];
     for (i = 0; i < out.length; i++) {
-      if (!out[i].el.__ompW && !insideLink(out[i].el)) { keep.push(out[i]); }
+      t = out[i];
+      if (t.card || (!t.el.__ompW && !inside(t.el))) { keep.push(t); }
     }
-    for (i = 0; i < out.length; i++) {
-      out[i].el.__ompT = 0;
-      out[i].el.__ompW = 0;
+    for (i = 0; i < out.length; i++) { out[i].el.__ompT = 0; out[i].el.__ompW = 0; }
+    var modal = modalRoot(), inModal = [];
+    if (modal) {
+      for (i = 0; i < keep.length; i++) {
+        if (modal.contains(keep[i].el)) { inModal.push(keep[i]); }
+      }
+      if (inModal.length) { return inModal; }
     }
     return keep;
   }
 
-  function insideLink(el) {
+  // True when a card or a link is an ancestor: the element belongs to it.
+  function inside(el) {
     var p = el.parentElement, depth = 0;
     while (p && depth < 12) {
-      if (p.__ompT && p.tagName === 'A') { return true; }
-      p = p.parentElement;
-      depth++;
+      if (p.__ompT === 2 || (p.__ompT === 1 && p.tagName === 'A')) { return true; }
+      p = p.parentElement; depth++;
     }
     return false;
   }
@@ -218,7 +314,7 @@
     var list = targets(), top = null, i, t;
     for (i = 0; i < list.length; i++) {
       t = list[i];
-      if (!onScreen(t.b)) { continue; }
+      if (!onScreen(t.b) || covered(t.el, t.b)) { continue; }
       if (!top || t.cy < top.cy - 30 || (Math.abs(t.cy - top.cy) <= 30 && t.cx < top.cx)) {
         top = t;
       }
@@ -230,26 +326,35 @@
   // The control that is nearest in the pressed direction. Along the press axis
   // the distance counts once, across it twice: a control straight below beats
   // a closer one that sits off to the side.
-  function nearest(dx, dy) {
+  function nearest(dx, dy, skip) {
     var fx = (focusedBox.left + focusedBox.right) / 2;
     var fy = (focusedBox.top + focusedBox.bottom) / 2;
-    var list = targets(), found = null, bestScore = Infinity, i, t, ox, oy, main, cross, s;
+    var list = targets(), bestIn = null, scoreIn = Infinity, bestOut = null, scoreOut = Infinity;
+    var i, t, ox, oy, main, cross, s, inColumn;
     for (i = 0; i < list.length; i++) {
       t = list[i];
-      if (t.el === focused) { continue; }
+      if (t.el === focused || skip.indexOf(t.el) >= 0) { continue; }
       ox = t.cx - fx;
       oy = t.cy - fy;
       if (dx !== 0) {
         if (dx * ox <= 0) { continue; }
         main = Math.abs(ox); cross = Math.abs(oy);
+        inColumn = t.b.bottom > focusedBox.top && t.b.top < focusedBox.bottom;   // same row
       } else {
         if (dy * oy <= 0) { continue; }
         main = Math.abs(oy); cross = Math.abs(ox);
+        inColumn = t.b.right > focusedBox.left && t.b.left < focusedBox.right;   // same column
       }
       s = main + cross * 2;
-      if (s < bestScore) { bestScore = s; found = t.el; }
+      if (inColumn) {
+        if (s < scoreIn) { scoreIn = s; bestIn = t.el; }
+      } else if (s < scoreOut) {
+        scoreOut = s; bestOut = t.el;
+      }
     }
-    return found;
+    // a control that lines up with the focus always wins; the sidebar or a
+    // header only takes over when nothing lines up in that direction
+    return bestIn || bestOut;
   }
 
   // Nothing left in that direction: scroll the nearest scrollable box, or the
@@ -270,8 +375,13 @@
   function move(dx, dy) {
     mount();
     if (!live(focused) || !focusedBox) { return focusFirst(); }
-    var next = nearest(dx, dy);
-    if (next) { paint(next); return true; }
+    var skip = [], next, k;
+    for (k = 0; k < 6; k++) {
+      next = nearest(dx, dy, skip);
+      if (!next) { break; }
+      if (!covered(next, visibleBox(next) || next.getBoundingClientRect())) { paint(next); return true; }
+      skip.push(next);
+    }
     scrollPage(dx, dy);
     return false;
   }
@@ -282,8 +392,9 @@
   function tap() {
     if (!live(focused) || !focusedBox) { return null; }
     var media = focused.tagName === 'VIDEO' || focused.tagName === 'IFRAME';
-    return [Math.round((focusedBox.left + focusedBox.right) / 2),
-            Math.round((focusedBox.top + focusedBox.bottom) / 2),
+    var hit = focused.__ompH || focused;   // a tile is activated through its link
+    var hr = hit.getBoundingClientRect();
+    return [Math.round((hr.left + hr.right) / 2), Math.round((hr.top + hr.bottom) / 2),
             media ? 1 : 0].join(',');
   }
 

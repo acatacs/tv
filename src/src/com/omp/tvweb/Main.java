@@ -178,7 +178,6 @@ public class Main extends Activity implements UrlBar.Submit {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        WebView.setWebContentsDebuggingEnabled(true); // DEBUG-TEMP
         for (String host : AD_HOSTS) adSet.add(host);
 
         dens = getResources().getDisplayMetrics().density;
@@ -378,9 +377,7 @@ public class Main extends Activity implements UrlBar.Submit {
     }
 
     static class NavDone implements ValueCallback<String> {
-        public void onReceiveValue(String v) {
-            Log.d(TAG, "nav " + v);
-        }
+        public void onReceiveValue(String v) { }
     }
 
     void activate() {
