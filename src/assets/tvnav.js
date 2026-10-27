@@ -572,6 +572,8 @@
     fullscreen: fullscreen,
     state: state,
     targets: function () { return targets().length; },
+    // force every video to unity gain and report how many were found
+    loud: function () { watchLoud(); loudAll(); return document.querySelectorAll('video').length; },
     // diagnostics: what the navigator would stop on, in order
     list: function () {
       return targets().map(function (t) {
@@ -581,6 +583,95 @@
     }
   };
 
+  // ---------------------------------------------------------------------
+  // Media loudness.
+  //
+  // The player these sites ship starts its <video> well below unity gain, and
+  // a WebView cannot raise it: the app has no handle on the element. Measured
+  // on the device, the mixer received peaks around -55 dBFS for this app while
+  // YouTube reached -12 dBFS through the same speaker, so the loss is upstream
+  // of Android. Force every video to full volume instead, and keep watching
+  // for the ones the player creates later.
+  // ---------------------------------------------------------------------
+  var LOUD = 1.0;
+  var loudObservers = [];
+  var loudDocs = [];
+  var loudTries = 0;
+  var LOUD_TRIES = 8;     // ~12 s of re-checking after load, then stop
+
+  // The player almost always lives in an iframe, so walking the top document is
+  // not enough: reach into every same-origin frame and patch what is there.
+  function eachDoc(fn) {
+    var i, d;
+    fn(document);
+    try {
+      var frames = document.getElementsByTagName('iframe');
+      for (i = 0; i < frames.length; i++) {
+        try {
+          d = frames[i].contentDocument;
+          if (d && d.documentElement) { fn(d); }
+        } catch (e) {}   // cross-origin: nothing to do from here
+      }
+    } catch (e) {}
+  }
+
+  function loud(el) {
+    if (!el || el.tagName !== 'VIDEO') { return; }
+    try {
+      if (el.__ompLoud) { return; }
+      el.__ompLoud = true;
+      el.volume = LOUD;
+      el.muted = false;
+      // the player resets these on its own events; put them back
+      el.addEventListener('volumechange', function () {
+        if (el.muted) { el.muted = false; }
+        if (el.volume !== LOUD) { el.volume = LOUD; }
+      });
+      el.addEventListener('play', function () {
+        if (el.muted) { el.muted = false; }
+        if (el.volume !== LOUD) { el.volume = LOUD; }
+      });
+    } catch (e) {}
+  }
+
+  function loudIn(doc) {
+    var vs, i;
+    try { vs = doc.getElementsByTagName('video'); } catch (e) { return; }
+    for (i = 0; i < vs.length; i++) { loud(vs[i]); }
+    // an <audio> player needs the same treatment
+    try {
+      var as = doc.getElementsByTagName('audio');
+      for (i = 0; i < as.length; i++) {
+        var ael = as[i];
+        if (ael.__ompLoud) { continue; }
+        ael.__ompLoud = true;
+        ael.volume = LOUD;
+        ael.muted = false;
+      }
+    } catch (e) {}
+  }
+
+  function loudAll() { eachDoc(loudIn); }
+
+  function watchLoud() {
+    loudAll();
+    eachDoc(function (doc) {
+      if (loudDocs.indexOf(doc) >= 0 || !doc.documentElement) { return; }
+      loudDocs.push(doc);
+      try {
+        var o = new MutationObserver(function () { loudIn(doc); });
+        o.observe(doc.documentElement, { childList: true, subtree: true });
+        loudObservers.push(o);
+      } catch (e) {}
+    });
+    // a frame can be injected after load, and the player inside it after that,
+    // so keep checking for a while and then stop
+    if (loudTries++ < LOUD_TRIES) {
+      setTimeout(function () { loudAll(); watchLoud(); }, 1500);
+    }
+  }
+
   mount();
   focusFirst();
+  watchLoud();
 })();
