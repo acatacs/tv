@@ -684,13 +684,33 @@ public class Main extends Activity implements UrlBar.Submit {
         return navSource;
     }
 
+    // One move in flight at a time. Presses that arrive meanwhile are summed
+    // into one pending move, so holding a key costs one scan per frame, not a
+    // queue of scans.
+    boolean navBusy;
+    int navPendX, navPendY;
+
     void nav(int dx, int dy) {
+        if (navBusy) {
+            navPendX += dx;
+            navPendY += dy;
+            return;
+        }
+        navBusy = true;
         web.evaluateJavascript("window.__ompNav&&window.__ompNav.move(" + dx + "," + dy + ")",
-                new NavDone());
+                new NavDone(this));
     }
 
     static class NavDone implements ValueCallback<String> {
-        public void onReceiveValue(String v) { }
+        final Main a;
+        NavDone(Main m) { a = m; }
+        public void onReceiveValue(String v) {
+            a.navBusy = false;
+            int dx = a.navPendX, dy = a.navPendY;
+            a.navPendX = 0;
+            a.navPendY = 0;
+            if (dx != 0 || dy != 0) a.nav(dx, dy);
+        }
     }
 
     void activate() {
